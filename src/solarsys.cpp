@@ -167,21 +167,28 @@ static Body* CreatePlanet(PlanetarySystem* system,
     planetData->getNumber("RotationPeriod", rotationPeriod);
     body->setRotationPeriod(rotationPeriod);
 
-    Color color(1.0f, 1.0f, 1.0f);
-    planetData->getColor("Color", color);
-    body->setColor(color);
-
-    string texture("");
-    planetData->getString("Texture", texture);
-    body->setTexture(texture);
+    Surface surface;
+    surface.color = Color(1.0f, 1.0f, 1.0f);
+    planetData->getColor("Color", surface.color);
+    bool applyBaseTexture = planetData->getString("Texture", surface.baseTexture);
+    bool applyBumpMap = planetData->getString("BumpMap", surface.bumpTexture);
+    bool blendTexture = false;
+    planetData->getBoolean("BlendTexture", blendTexture);
+    bool compressTexture = false;
+    planetData->getBoolean("CompressTexture", compressTexture);
+    if (blendTexture)
+        surface.appearanceFlags |= Surface::BlendTexture;
+    if (applyBaseTexture)
+        surface.appearanceFlags |= Surface::ApplyBaseTexture;
+    if (applyBumpMap)
+        surface.appearanceFlags |= Surface::ApplyBumpMap;
+    if (compressTexture)
+        surface.appearanceFlags |= Surface::CompressBaseTexture;
+    body->setSurface(surface);
     
     string mesh("");
     planetData->getString("Mesh", mesh);
     body->setMesh(mesh);
-
-    bool blendTexture = false;
-    planetData->getBoolean("BlendTexture", blendTexture);
-    body->setAppearanceFlag(Body::BlendTexture, blendTexture);
 
     // Read the ring system
     {

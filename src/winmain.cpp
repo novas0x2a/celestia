@@ -13,6 +13,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <cctype>
+#include <cstring>
 #include <time.h>
 #include <windows.h>
 #include <commctrl.h>
@@ -227,6 +228,65 @@ BOOL APIENTRY LicenseProc(HWND hDlg,
 }
 
 
+BOOL APIENTRY GLInfoProc(HWND hDlg,
+                         UINT message,
+                         UINT wParam,
+                         LONG lParam)
+{
+    switch (message)
+    {
+    case WM_INITDIALOG:
+        {
+            char* vendor = (char*) glGetString(GL_VENDOR);
+            char* render = (char*) glGetString(GL_RENDERER);
+            char* version = (char*) glGetString(GL_VERSION);
+            char* ext = (char*) glGetString(GL_EXTENSIONS);
+            string s;
+            s += "Vendor: ";
+            if (vendor != NULL)
+                s += vendor;
+            s += "\r\r\n";
+            
+            s += "Renderer: ";
+            if (render != NULL)
+                s += render;
+            s += "\r\r\n";
+
+            s += "Version: ";
+            if (version != NULL)
+                s += version;
+            s += "\r\r\n";
+
+            s += "\r\r\nSupported Extensions:\r\r\n";
+            if (ext != NULL)
+            {
+                string extString(ext);
+                int pos = extString.find(' ', 0);
+                while (pos != string::npos)
+                {
+                    extString.replace(pos, 1, "\r\r\n");
+                    pos = extString.find(' ', pos);
+                }
+                s += extString;
+            }
+
+            SetDlgItemText(hDlg, IDC_GLINFO_TEXT, s.c_str());
+        }
+        return(TRUE);
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK)
+        {
+            EndDialog(hDlg, 0);
+            return TRUE;
+        }
+        break;
+    }
+
+    return FALSE;
+}
+
+
 BOOL APIENTRY FindObjectProc(HWND hDlg,
                              UINT message,
                              UINT wParam,
@@ -289,6 +349,35 @@ HMENU CreateMenuBar()
 }
 
 
+static void ToggleLabelState(int menuItem, int labelState)
+{
+    if ((GetMenuState(menuBar, menuItem, MF_BYCOMMAND) & MF_CHECKED) == 0)
+    {
+        renderer->setLabelMode(renderer->getLabelMode() | labelState);
+        CheckMenuItem(menuBar, menuItem, MF_CHECKED);
+    }
+    else
+    {
+        renderer->setLabelMode(renderer->getLabelMode() & ~labelState);
+        CheckMenuItem(menuBar, menuItem, MF_UNCHECKED);
+    }
+}
+
+
+static bool ToggleMenuItem(int menuItem)
+{
+    if ((GetMenuState(menuBar, menuItem, MF_BYCOMMAND) & MF_CHECKED) == 0)
+    {
+        CheckMenuItem(menuBar, menuItem, MF_CHECKED);
+        return true;
+    }
+    else
+    {
+        CheckMenuItem(menuBar, menuItem, MF_UNCHECKED);
+        return false;
+    }
+}
+
 
 VOID APIENTRY handlePopupMenu(HWND hwnd, POINT point,
                               const SolarSystem& solarSystem)
@@ -304,11 +393,82 @@ VOID APIENTRY handlePopupMenu(HWND hwnd, POINT point,
                    body->getName().c_str());
     }
 
-    ClientToScreen (hwnd, (LPPOINT) &point);
+    if (!fullscreen)
+        ClientToScreen(hwnd, (LPPOINT) &point);
 
     TrackPopupMenu (hMenu, 0, point.x, point.y, 0, hwnd, NULL);
 
     DestroyMenu (hMenu);
+}
+
+
+HMENU CreatePlanetarySystemMenu(const PlanetarySystem* planets)
+{
+    HMENU menu = CreatePopupMenu();
+    
+    for (int i = 0; i < planets->getSystemSize(); i++)
+    {
+        Body* body = planets->getBody(i);
+        AppendMenu(menu, MF_STRING, MENU_CHOOSE_PLANET + i,
+                   body->getName().c_str());
+    }
+
+    return menu;
+}
+
+
+VOID APIENTRY handlePopupMenu(HWND hwnd, POINT point,
+                              const Selection& sel)
+{
+    HMENU hMenu;
+    string name;
+
+    hMenu = CreatePopupMenu();
+
+    if (sel.body != NULL)
+    {
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_CENTER, sel.body->getName().c_str());
+        AppendMenu(hMenu, MF_SEPARATOR, 0, 0);
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_GOTO, "&Goto");
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_FOLLOW, "&Follow");
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_FOLLOW, "&Info");
+
+        const PlanetarySystem* satellites = sel.body->getSatellites();
+        if (satellites != NULL && satellites->getSystemSize() != 0)
+        {
+            HMENU satMenu = CreatePlanetarySystemMenu(satellites);
+            AppendMenu(hMenu, MF_POPUP | MF_STRING, (DWORD) satMenu,
+                       "&Satellites");
+        }
+    }
+    else if (sel.star != NULL)
+    {
+        name = starDB->getStarName(sel.star->getCatalogNumber());
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_CENTER, name.c_str());
+        AppendMenu(hMenu, MF_SEPARATOR, 0, 0);
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_GOTO, "&Goto");
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_FOLLOW, "&Info");
+
+        SolarSystemCatalog::iterator iter = solarSystemCatalog->find(sel.star->getCatalogNumber());
+        if (iter != solarSystemCatalog->end())
+        {
+            SolarSystem* solarSys = iter->second;
+            HMENU planetsMenu = CreatePlanetarySystemMenu(solarSys->getPlanets());
+            AppendMenu(hMenu,
+                       MF_POPUP | MF_STRING,
+                       (DWORD) planetsMenu,
+                       "&Planets");
+        }
+    }
+
+    ClientToScreen(hwnd, (LPPOINT) &point);
+
+    sim->setSelection(sel);
+    TrackPopupMenu(hMenu, 0, point.x, point.y, 0, hwnd, NULL);
+
+    // TODO: Do we need to explicitly destroy submenus or does DestroyMenu
+    // work recursively?
+    DestroyMenu(hMenu);
 }
 
 
@@ -437,12 +597,30 @@ void handleKeyPress(int c)
         sim->setTimeScale(10.0 * sim->getTimeScale());
         break;
 
+    case 'J':
+        sim->setTimeScale(-sim->getTimeScale());
+        break;
+
+    case 'B':
+        ToggleLabelState(ID_RENDER_SHOWSTARLABELS, Renderer::StarLabels);
+        break;
+
     case 'N':
-        renderer->setLabelMode(renderer->getLabelMode() ^ Renderer::PlanetLabels);
+        ToggleLabelState(ID_RENDER_SHOWPLANETLABELS, Renderer::PlanetLabels);
         break;
 
     case 'O':
-        renderer->setLabelMode(renderer->getLabelMode() ^ Renderer::PlanetOrbits);
+        ToggleLabelState(ID_RENDER_SHOWORBITS, Renderer::PlanetOrbits);
+        break;
+
+    case 'P':
+        if (renderer->perPixelLightingSupported())
+        {
+            bool enabled = !renderer->getPerPixelLighting();
+            CheckMenuItem(menuBar, ID_RENDER_PERPIXEL_LIGHTING,
+                          enabled ? MF_CHECKED : MF_UNCHECKED);
+            renderer->setPerPixelLighting(enabled);
+        }
         break;
 
     case '1':
@@ -626,6 +804,7 @@ int APIENTRY WinMain(HINSTANCE hInstance,
 
     // Set the simulation starting time to the current system time
     sim->setTime((double) time(NULL) + (double) astro::Date(1970, 1, 1) * 86400.0);
+    sim->update(0.0);
 
     if (!fullscreen)
     {
@@ -683,9 +862,15 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     if (!renderer->init((int) g_w, (int) g_h)) {
 	MessageBox(hWnd,
 		   "Failed to initialize",
-		   "Fatal Blow",
+		   "Fatal Error",
 		   MB_OK | MB_ICONERROR);
 	return FALSE;
+    }
+
+    if (renderer->perPixelLightingSupported())
+    {
+        renderer->setPerPixelLighting(true);
+        CheckMenuItem(menuBar, ID_RENDER_PERPIXEL_LIGHTING, MF_CHECKED);
     }
 
     // Set up the star labels
@@ -701,6 +886,10 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     // We're now ready.
     bReady = 1;
 
+    // Start out at the moon
+    sim->selectBody("Moon");
+    sim->gotoSelection();
+
     // Usual running around in circles bit...
     int bGotMsg;
     MSG  msg;
@@ -708,8 +897,8 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     while (msg.message != WM_QUIT)
     {
 	// Use PeekMessage() if the app is active, so we can use idle time to
-	// render the scene. Else, use GetMessage() to avoid eating CPU time.
-	bGotMsg = PeekMessage( &msg, NULL, 0U, 0U, PM_REMOVE );
+	// render the scene.  Else, use GetMessage() to avoid eating CPU time.
+	bGotMsg = PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE);
 
 	if (bGotMsg)
         {
@@ -731,36 +920,6 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     renderer->shutdown();
 
     return msg.wParam;
-}
-
-
-static void ToggleLabelState(int menuItem, int labelState)
-{
-    if ((GetMenuState(menuBar, menuItem, MF_BYCOMMAND) & MF_CHECKED) == 0)
-    {
-        renderer->setLabelMode(renderer->getLabelMode() | labelState);
-        CheckMenuItem(menuBar, menuItem, MF_CHECKED);
-    }
-    else
-    {
-        renderer->setLabelMode(renderer->getLabelMode() & ~labelState);
-        CheckMenuItem(menuBar, menuItem, MF_UNCHECKED);
-    }
-}
-
-
-static bool ToggleMenuItem(int menuItem)
-{
-    if ((GetMenuState(menuBar, menuItem, MF_BYCOMMAND) & MF_CHECKED) == 0)
-    {
-        CheckMenuItem(menuBar, menuItem, MF_CHECKED);
-        return true;
-    }
-    else
-    {
-        CheckMenuItem(menuBar, menuItem, MF_UNCHECKED);
-        return false;
-    }
 }
 
 
@@ -850,6 +1009,7 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
                                                  HIWORD(lParam));
             Selection oldSel = sim->getSelection();
             Selection newSel = sim->pickObject(pickRay);
+            sim->setSelection(newSel);
             if (!oldSel.empty() && oldSel == newSel)
                 sim->centerSelection();
         }
@@ -872,9 +1032,16 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
             POINT pt;
             pt.x = LOWORD(lParam);
             pt.y = HIWORD(lParam);
+#if 0
             SolarSystem* solarsys = sim->getNearestSolarSystem();
             if (solarsys != NULL)
                 handlePopupMenu(hWnd, pt, *solarsys);
+#endif
+            Vec3f pickRay = renderer->getPickRay(LOWORD(lParam),
+                                                 HIWORD(lParam));
+            Selection sel = sim->pickObject(pickRay);
+            if (!sel.empty())
+                handlePopupMenu(hWnd, pt, sel);
         }
         break;
 
@@ -974,6 +1141,15 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
             CheckMenuItem(menuBar, ID_RENDER_AMBIENTLIGHT_MEDIUM, MF_CHECKED);
             renderer->setAmbientLightLevel(0.25f);
             break;
+        case ID_RENDER_PERPIXEL_LIGHTING:
+            if (renderer->perPixelLightingSupported())
+            {
+                bool enabled = !renderer->getPerPixelLighting();
+                CheckMenuItem(menuBar, ID_RENDER_PERPIXEL_LIGHTING,
+                              enabled ? MF_CHECKED : MF_UNCHECKED);
+                renderer->setPerPixelLighting(enabled);
+            }
+            break;
 
         case ID_TIME_FASTER:
             sim->setTimeScale(10.0 * sim->getTimeScale());
@@ -998,12 +1174,19 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
             }
             paused = !paused;
             break;
+        case ID_TIME_REVERSE:
+            sim->setTimeScale(-sim->getTimeScale());
+            break;
         case ID_TIME_SETTIME:
             DialogBox(appInstance, MAKEINTRESOURCE(IDD_SETTIME), hWnd, SetTimeProc);
             break;
 
         case ID_HELP_ABOUT:
             DialogBox(appInstance, MAKEINTRESOURCE(IDD_ABOUT), hWnd, AboutProc);
+            break;
+
+        case ID_HELP_GLINFO:
+            DialogBox(appInstance, MAKEINTRESOURCE(IDD_GLINFO), hWnd, GLInfoProc);
             break;
 
         case ID_HELP_LICENSE:

@@ -58,6 +58,7 @@ CLEAN :
 	-@erase "$(INTDIR)\orbit.obj"
 	-@erase "$(INTDIR)\parser.obj"
 	-@erase "$(INTDIR)\perlin.obj"
+	-@erase "$(INTDIR)\regcombine.obj"
 	-@erase "$(INTDIR)\render.obj"
 	-@erase "$(INTDIR)\resmanager.obj"
 	-@erase "$(INTDIR)\simulation.obj"
@@ -71,9 +72,9 @@ CLEAN :
 	-@erase "$(INTDIR)\texmanager.obj"
 	-@erase "$(INTDIR)\texture.obj"
 	-@erase "$(INTDIR)\tokenizer.obj"
-	-@erase "$(INTDIR)\trilist.obj"
 	-@erase "$(INTDIR)\univcoord.obj"
 	-@erase "$(INTDIR)\vc60.idb"
+	-@erase "$(INTDIR)\vertexlist.obj"
 	-@erase "$(INTDIR)\visstars.obj"
 	-@erase "$(INTDIR)\winmain.obj"
 	-@erase "$(OUTDIR)\celestia.exe"
@@ -145,6 +146,7 @@ LINK32_OBJS= \
 	"$(INTDIR)\orbit.obj" \
 	"$(INTDIR)\parser.obj" \
 	"$(INTDIR)\perlin.obj" \
+	"$(INTDIR)\regcombine.obj" \
 	"$(INTDIR)\render.obj" \
 	"$(INTDIR)\resmanager.obj" \
 	"$(INTDIR)\simulation.obj" \
@@ -158,8 +160,8 @@ LINK32_OBJS= \
 	"$(INTDIR)\texmanager.obj" \
 	"$(INTDIR)\texture.obj" \
 	"$(INTDIR)\tokenizer.obj" \
-	"$(INTDIR)\trilist.obj" \
 	"$(INTDIR)\univcoord.obj" \
+	"$(INTDIR)\vertexlist.obj" \
 	"$(INTDIR)\visstars.obj" \
 	"$(INTDIR)\winmain.obj" \
 	"$(INTDIR)\celestia.res"
@@ -202,6 +204,7 @@ CLEAN :
 	-@erase "$(INTDIR)\orbit.obj"
 	-@erase "$(INTDIR)\parser.obj"
 	-@erase "$(INTDIR)\perlin.obj"
+	-@erase "$(INTDIR)\regcombine.obj"
 	-@erase "$(INTDIR)\render.obj"
 	-@erase "$(INTDIR)\resmanager.obj"
 	-@erase "$(INTDIR)\simulation.obj"
@@ -215,11 +218,11 @@ CLEAN :
 	-@erase "$(INTDIR)\texmanager.obj"
 	-@erase "$(INTDIR)\texture.obj"
 	-@erase "$(INTDIR)\tokenizer.obj"
-	-@erase "$(INTDIR)\trilist.obj"
 	-@erase "$(INTDIR)\univcoord.obj"
 	-@erase "$(INTDIR)\vc60.idb"
 	-@erase "$(INTDIR)\vc60.pdb"
 	-@erase "$(INTDIR)\visstars.obj"
+	-@erase "$(INTDIR)\vertexlist.obj"
 	-@erase "$(INTDIR)\winmain.obj"
 	-@erase "$(OUTDIR)\celestia.exe"
 	-@erase "$(OUTDIR)\celestia.ilk"
@@ -292,6 +295,7 @@ LINK32_OBJS= \
 	"$(INTDIR)\orbit.obj" \
 	"$(INTDIR)\parser.obj" \
 	"$(INTDIR)\perlin.obj" \
+	"$(INTDIR)\regcombine.obj" \
 	"$(INTDIR)\render.obj" \
 	"$(INTDIR)\resmanager.obj" \
 	"$(INTDIR)\simulation.obj" \
@@ -305,9 +309,9 @@ LINK32_OBJS= \
 	"$(INTDIR)\texmanager.obj" \
 	"$(INTDIR)\texture.obj" \
 	"$(INTDIR)\tokenizer.obj" \
-	"$(INTDIR)\trilist.obj" \
 	"$(INTDIR)\univcoord.obj" \
 	"$(INTDIR)\visstars.obj" \
+	"$(INTDIR)\vertexlist.obj" \
 	"$(INTDIR)\winmain.obj" \
 	"$(INTDIR)\celestia.res"
 
@@ -449,6 +453,12 @@ SOURCE=.\src\perlin.cpp
 	$(CPP) $(CPP_PROJ) $(SOURCE)
 
 
+SOURCE=.\src\regcombine.cpp
+
+"$(INTDIR)\regcombine.obj" : $(SOURCE) "$(INTDIR)"
+	$(CPP) $(CPP_PROJ) $(SOURCE)
+
+
 SOURCE=.\src\render.cpp
 
 "$(INTDIR)\render.obj" : $(SOURCE) "$(INTDIR)"
@@ -527,12 +537,6 @@ SOURCE=.\src\tokenizer.cpp
 	$(CPP) $(CPP_PROJ) $(SOURCE)
 
 
-SOURCE=.\src\trilist.cpp
-
-"$(INTDIR)\trilist.obj" : $(SOURCE) "$(INTDIR)"
-	$(CPP) $(CPP_PROJ) $(SOURCE)
-
-
 SOURCE=.\src\univcoord.cpp
 
 "$(INTDIR)\univcoord.obj" : $(SOURCE) "$(INTDIR)"
@@ -542,6 +546,12 @@ SOURCE=.\src\univcoord.cpp
 SOURCE=.\src\visstars.cpp
 
 "$(INTDIR)\visstars.obj" : $(SOURCE) "$(INTDIR)"
+	$(CPP) $(CPP_PROJ) $(SOURCE)
+
+
+SOURCE=.\src\vertexlist.cpp
+
+"$(INTDIR)\vertexlist.obj" : $(SOURCE) "$(INTDIR)"
 	$(CPP) $(CPP_PROJ) $(SOURCE)
 
 

@@ -61,6 +61,9 @@ class Renderer
     void clearLabelledStars();
     float getAmbientLightLevel() const;
     void setAmbientLightLevel(float);
+    bool getPerPixelLighting() const;
+    void setPerPixelLighting(bool);
+    bool perPixelLightingSupported() const;
 
     typedef struct {
         string text;
@@ -148,6 +151,7 @@ class Renderer
     int renderMode;
     int labelMode;
     float ambientLightLevel;
+    bool perPixelLightingEnabled;
 
     vector<RenderListEntry> renderList;
     vector<Particle> starParticles;
@@ -161,6 +165,9 @@ class Renderer
     double projMatrix[16];
 
     int nSimultaneousTextures;
+    bool useRegisterCombiners;
+    bool useCubeMaps;
+    bool useCompressedTextures;
 
  public:
     friend bool operator<(const Renderer::RenderListEntry&,

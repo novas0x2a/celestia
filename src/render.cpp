@@ -17,6 +17,7 @@
 #include "texfont.h"
 #include "console.h"
 #include "gui.h"
+#include "regcombine.h"
 #include "render.h"
 
 using namespace std;
@@ -27,6 +28,8 @@ using namespace std;
 
 #define RENDER_DISTANCE 10.0f
 
+#define FAINTEST_MAGNITUDE  5.5f
+
 // Static meshes and textures used by all instances of Simulation
 
 static bool commonDataInitialized = false;
@@ -35,6 +38,8 @@ static bool commonDataInitialized = false;
 
 static SphereMesh* sphereMesh[SPHERE_LODS];
 static SphereMesh* asteroidMesh = NULL;
+
+static CTexture* normalizationTex = NULL;
 
 static CTexture* starTex = NULL;
 static CTexture* glareTex = NULL;
@@ -51,8 +56,11 @@ Renderer::Renderer() :
     renderMode(GL_FILL),
     labelMode(NoLabels),
     ambientLightLevel(0.1f),
+    perPixelLightingEnabled(false),
     console(NULL),
-    nSimultaneousTextures(1)
+    nSimultaneousTextures(1),
+    useRegisterCombiners(false),
+    useCubeMaps(false)
 {
     textureManager = new TextureManager("textures");
     meshManager = new MeshManager("models");
@@ -162,7 +170,7 @@ bool Renderer::init(int winWidth, int winHeight)
         starTex = CreateProceduralTexture(64, 64, GL_RGB, StarTextureEval);
         starTex->bindName();
 
-        glareTex = CreateJPEGTexture("textures\\glare.jpg");
+        glareTex = CreateJPEGTexture("textures\\flare.jpg");
         if (glareTex == NULL)
             glareTex = CreateProceduralTexture(64, 64, GL_RGB, GlareTextureEval);
         glareTex->bindName();
@@ -180,9 +188,13 @@ bool Renderer::init(int winWidth, int winHeight)
         if (font != NULL)
             txfEstablishTexture(font, 0, GL_TRUE);
 
+        // Initialize GL extensions
         if (ExtensionSupported("GL_ARB_multitexture"))
             InitExtMultiTexture();
-
+        if (ExtensionSupported("GL_NV_register_combiners"))
+            InitExtRegisterCombiners();
+        if (ExtensionSupported("GL_EXT_texture_cube_map"))
+            normalizationTex = CreateNormalizationCubeMap(64);
 
         commonDataInitialized = true;
     }
@@ -192,7 +204,20 @@ bool Renderer::init(int winWidth, int winHeight)
 
     // Get GL extension information
     if (ExtensionSupported("GL_ARB_multitexture"))
+    {
+        DPRINTF("Renderer: multi-texture supported.\n");
         glGetIntegerv(GL_MAX_TEXTURE_UNITS_ARB, &nSimultaneousTextures);
+    }
+    if (ExtensionSupported("GL_NV_register_combiners"))
+    {
+        DPRINTF("Renderer: nVidia register combiners supported.\n");
+        useRegisterCombiners = true;
+    }
+    if (ExtensionSupported("GL_EXT_texture_cube_map"))
+    {
+        DPRINTF("Renderer: cube texture maps supported.\n");
+        useCubeMaps = true;
+    }
 
     cout << "Simultaneous textures supported: " << nSimultaneousTextures << '\n';
 
@@ -203,6 +228,9 @@ bool Renderer::init(int winWidth, int winHeight)
 
     glEnable(GL_COLOR_MATERIAL);
     glEnable(GL_LIGHTING);
+
+    // LEQUAL rather than LESS required for multipass rendering
+    glDepthFunc(GL_LEQUAL);
 
     // We need this enabled because we use glScale, but only
     // with uniform scale factors
@@ -297,6 +325,22 @@ float Renderer::getAmbientLightLevel() const
 void Renderer::setAmbientLightLevel(float level)
 {
     ambientLightLevel = level;
+}
+
+
+bool Renderer::getPerPixelLighting() const
+{
+    return perPixelLightingEnabled;
+}
+
+void Renderer::setPerPixelLighting(bool enable)
+{
+    perPixelLightingEnabled = enable && perPixelLightingSupported();
+}
+
+bool Renderer::perPixelLightingSupported() const
+{
+    return useCubeMaps && useRegisterCombiners;
 }
 
 
@@ -691,6 +735,97 @@ void Renderer::renderBodyAsParticle(Point3f position,
 }
 
 
+static void renderBumpMappedMesh(Mesh& mesh,
+                                 CTexture& bumpTexture,
+                                 Vec3f lightDirection,
+                                 Quatf orientation,
+                                 Color ambientColor)
+{
+    // We're doing our own per-pixel lighting, so disable GL's lighting
+    glDisable(GL_LIGHTING);
+
+    // Render the base texture on the first pass . . .  The base
+    // texture and color should have been set up already by the
+    // caller.
+    mesh.render();
+
+    // The 'default' light vector for the bump map is (0, 0, 1).  Determine
+    // a rotation transformation that will move the sun direction to
+    // this vector.
+    Quatf lightOrientation;
+    {
+        Vec3f zeroLightDirection(0, 0, 1);
+        Vec3f axis = lightDirection ^ zeroLightDirection;
+        float cosAngle = zeroLightDirection * lightDirection;
+        float angle = 0.0f;
+        float epsilon = 1e-5f;
+
+        if (cosAngle + 1 < epsilon)
+        {
+            axis = Vec3f(0, 1, 0);
+            angle = (float) PI;
+        }
+        else if (cosAngle - 1 > -epsilon)
+        {
+            axis = Vec3f(0, 1, 0);
+            angle = 0.0f;
+        }
+        else
+        {
+            axis.normalize();
+            angle = (float) acos(cosAngle);
+        }
+        lightOrientation.setAxisAngle(axis, angle);
+    }
+
+    // Set up the bump map with one directional light source
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_DST_COLOR, GL_ZERO);
+
+    SetupCombinersBumpMap(bumpTexture, *normalizationTex, ambientColor);
+
+    // The second set texture coordinates will contain the light
+    // direction in tangent space.  We'll generate the texture coordinates
+    // from the surface normals using GL_NORMAL_MAP_EXT and then
+    // use the texture matrix to rotate them into tangent space.
+    // This method of generating tangent space light direction vectors
+    // isn't as general as transforming the light direction by an
+    // orthonormal basis for each mesh vertex, but it works well enough
+    // for spheres illuminated by directional light sources.
+    glActiveTextureARB(GL_TEXTURE1_ARB);
+
+    // Set up GL_NORMAL_MAP_EXT texture coordinate generation.  This
+    // mode is part of the cube map extension.
+    glEnable(GL_TEXTURE_GEN_R);
+    glTexGeni(GL_R, GL_TEXTURE_GEN_MODE, GL_NORMAL_MAP_EXT);
+    glEnable(GL_TEXTURE_GEN_S);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_NORMAL_MAP_EXT);
+    glEnable(GL_TEXTURE_GEN_T);
+    glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_NORMAL_MAP_EXT);
+
+    // Set up the texture transformation--the light direction and the
+    // viewer orientation both need to be considered.
+    glMatrixMode(GL_TEXTURE);
+    glRotate(lightOrientation * orientation);
+    glMatrixMode(GL_MODELVIEW);
+    glActiveTextureARB(GL_TEXTURE0_ARB);
+
+    mesh.render();
+
+    // Reset the second texture unit
+    glActiveTextureARB(GL_TEXTURE1_ARB);
+    glMatrixMode(GL_TEXTURE);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glDisable(GL_TEXTURE_GEN_R);
+    glDisable(GL_TEXTURE_GEN_S);
+    glDisable(GL_TEXTURE_GEN_T);
+
+    DisableCombiners();
+    glDisable(GL_BLEND);
+}
+
+
 void Renderer::renderPlanet(const Body& body,
                             Point3f pos,
                             Vec3f sunDirection,
@@ -714,12 +849,26 @@ void Renderer::renderPlanet(const Body& body,
         glLightColor(GL_LIGHT0, GL_DIFFUSE, Vec3f(1.0f, 1.0f, 1.0f));
         glEnable(GL_LIGHT0);
 
+        const Surface& surface = body.getSurface();
         // Get the texture . . .
         CTexture* tex = NULL;
-        if (body.getTexture() != "")
+        CTexture* bumpTex = NULL;
+        if (surface.baseTexture != "")
         {
-            if (!textureManager->find(body.getTexture(), &tex))
-                tex = textureManager->load(body.getTexture());
+            if (!textureManager->find(surface.baseTexture, &tex))
+            {
+                bool compress = ((surface.appearanceFlags & Surface::CompressBaseTexture) != 0);
+                tex = textureManager->load(surface.baseTexture, compress);
+            }
+        }
+
+        // If this renderer can support bump mapping then get the bump texture
+        if ((surface.appearanceFlags & Surface::ApplyBumpMap) != 0 &&
+            (perPixelLightingEnabled && useRegisterCombiners && useCubeMaps) &&
+            surface.bumpTexture != "")
+        {
+            if (!textureManager->find(surface.bumpTexture, &bumpTex))
+                bumpTex = textureManager->loadBumpMap(surface.bumpTexture);
         }
 
         if (tex == NULL)
@@ -732,8 +881,8 @@ void Renderer::renderPlanet(const Body& body,
             glBindTexture(GL_TEXTURE_2D, tex->getName());
         }
 
-        if (tex == NULL || body.getAppearanceFlag(Body::BlendTexture))
-            glColor(body.getColor());
+        if (tex == NULL || (surface.appearanceFlags & Surface::BlendTexture) != 0)
+            glColor(surface.color);
         else
             glColor4f(1, 1, 1, 1);
 
@@ -790,7 +939,13 @@ void Renderer::renderPlanet(const Body& body,
         }
 
         if (mesh != NULL)
-            mesh->render();
+        {
+            if (bumpTex != NULL)
+                renderBumpMappedMesh(*mesh, *bumpTex, sunDirection, orientation,
+                                     Color(ambientLightLevel, ambientLightLevel, ambientLightLevel));
+            else
+                mesh->render();
+        }
 
         // If the planet has a ring system, render it.
         if (body.getRings() != NULL)
@@ -935,7 +1090,7 @@ void Renderer::renderPlanet(const Body& body,
     renderBodyAsParticle(pos,
                          appMag,
                          discSizeInPixels,
-                         body.getColor(),
+                         body.getSurface().color,
                          orientation,
                          false);
 #if 0
