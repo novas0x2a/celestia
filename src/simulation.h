@@ -30,7 +30,8 @@ class Simulation
     Simulation();
     ~Simulation();
 
-    void setTime(double t); // Time in seconds
+    double getTime() const; // Time in seconds
+    void setTime(double t);
 
     void update(double dt);
     void render(Renderer&);
@@ -60,16 +61,18 @@ class Simulation
     void gotoSelection();
     void centerSelection();
     void follow();
+    void cancelMotion();
 
     SolarSystem* getNearestSolarSystem() const;
 
-    void setTimeScale(double);
     double getTimeScale();
+    void setTimeScale(double);
+
+    float getFaintestVisible() const;
+    void setFaintestVisible(float);
 
     int getHUDDetail() const;
     void setHUDDetail(int);
-
-    void typeChar(char c);
 
     enum ObserverMode {
         Free        = 0,
@@ -119,8 +122,6 @@ class Simulation
     double simTime;
     double timeScale;
 
-    string typedText;
-
     StarDatabase* stardb;
     SolarSystemCatalog* solarSystemCatalog;
 
@@ -143,6 +144,8 @@ class Simulation
     bool following;
     JourneyParams journey;
     FollowParams followInfo;
+
+    float faintestVisible;
 
     int hudDetail;
 };

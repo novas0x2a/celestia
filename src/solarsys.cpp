@@ -52,6 +52,33 @@ Planet SolSystem[] =
 };
 
 
+static Surface* CreateSurface(Hash* surfaceData)
+{
+    Surface* surface = new Surface();
+
+    surface->color = Color(1.0f, 1.0f, 1.0f);
+    surfaceData->getColor("Color", surface->color);
+    bool applyBaseTexture = surfaceData->getString("Texture", surface->baseTexture);
+    bool applyBumpMap = surfaceData->getString("BumpMap", surface->bumpTexture);
+    surface->bumpHeight = 2.5f;
+    surfaceData->getNumber("BumpHeight", surface->bumpHeight);
+    bool blendTexture = false;
+    surfaceData->getBoolean("BlendTexture", blendTexture);
+    bool compressTexture = false;
+    surfaceData->getBoolean("CompressTexture", compressTexture);
+    if (blendTexture)
+        surface->appearanceFlags |= Surface::BlendTexture;
+    if (applyBaseTexture)
+        surface->appearanceFlags |= Surface::ApplyBaseTexture;
+    if (applyBumpMap)
+        surface->appearanceFlags |= Surface::ApplyBumpMap;
+    if (compressTexture)
+        surface->appearanceFlags |= Surface::CompressBaseTexture;
+
+    return surface;
+}
+
+
 static Body* createSatellite(Planet* p)
 {
     EllipticalOrbit* orbit = new EllipticalOrbit(astro::AUtoKilometers(p->semiMajorAxis),
@@ -126,25 +153,36 @@ static Body* CreatePlanet(PlanetarySystem* system,
     double ascendingNode = 0.0;
     planetData->getNumber("AscendingNode", ascendingNode);
 
-    double argOfPeriapsis = 0.0;
-    planetData->getNumber("ArgOfPeriapsis", argOfPeriapsis);
+    double longOfPericenter = 0.0;
+    planetData->getNumber("ArgOfPeriapsis", longOfPericenter);
 
-    double trueAnomaly = 0.0;
-    planetData->getNumber("TrueAnomaly", trueAnomaly);
+    double epoch = astro::J2000;
+    planetData->getNumber("Epoch", epoch);
+
+    // Accept either the mean anomaly or mean longitude--use mean anomaly
+    // if both are specified.
+    double anomalyAtEpoch = 0.0;
+    if (!planetData->getNumber("MeanAnomaly", anomalyAtEpoch))
+    {
+        double longAtEpoch = 0.0;
+        if (planetData->getNumber("MeanLongitude", longAtEpoch))
+            anomalyAtEpoch = longAtEpoch - longOfPericenter;
+    }
 
     if (usePlanetUnits)
     {
         semiMajorAxis = astro::AUtoKilometers(semiMajorAxis);
-        period = period * 265.25f;
+        period = period * 365.25f;
     }
 
     body->setOrbit(new EllipticalOrbit(semiMajorAxis,
                                        eccentricity,
                                        degToRad(inclination),
                                        degToRad(ascendingNode),
-                                       degToRad(argOfPeriapsis),
-                                       degToRad(trueAnomaly),
-                                       period));
+                                       degToRad(longOfPericenter),
+                                       degToRad(anomalyAtEpoch),
+                                       period,
+                                       epoch));
     
     double obliquity = 0.0;
     planetData->getNumber("Obliquity", obliquity);
@@ -167,21 +205,33 @@ static Body* CreatePlanet(PlanetarySystem* system,
     planetData->getNumber("RotationPeriod", rotationPeriod);
     body->setRotationPeriod(rotationPeriod);
 
-    Color color(1.0f, 1.0f, 1.0f);
-    planetData->getColor("Color", color);
-    body->setColor(color);
-
-    string texture("");
-    planetData->getString("Texture", texture);
-    body->setTexture(texture);
+#if 0    
+    Surface surface;
+    surface.color = Color(1.0f, 1.0f, 1.0f);
+    planetData->getColor("Color", surface.color);
+    bool applyBaseTexture = planetData->getString("Texture", surface.baseTexture);
+    bool applyBumpMap = planetData->getString("BumpMap", surface.bumpTexture);
+    bool blendTexture = false;
+    planetData->getBoolean("BlendTexture", blendTexture);
+    bool compressTexture = false;
+    planetData->getBoolean("CompressTexture", compressTexture);
+    if (blendTexture)
+        surface.appearanceFlags |= Surface::BlendTexture;
+    if (applyBaseTexture)
+        surface.appearanceFlags |= Surface::ApplyBaseTexture;
+    if (applyBumpMap)
+        surface.appearanceFlags |= Surface::ApplyBumpMap;
+    if (compressTexture)
+        surface.appearanceFlags |= Surface::CompressBaseTexture;
+    body->setSurface(surface);
+#endif
+    Surface* surface = CreateSurface(planetData);
+    body->setSurface(*surface);
+    delete surface;
     
     string mesh("");
     planetData->getString("Mesh", mesh);
     body->setMesh(mesh);
-
-    bool blendTexture = false;
-    planetData->getBoolean("BlendTexture", blendTexture);
-    body->setAppearanceFlag(Body::BlendTexture, blendTexture);
 
     // Read the ring system
     {
@@ -204,8 +254,11 @@ static Body* CreatePlanet(PlanetarySystem* system,
                 Color color(1.0f, 1.0f, 1.0f);
                 ringsData->getColor("Color", color);
 
+                string texture;
+                ringsData->getString("Texture", texture);
+
                 body->setRings(RingSystem((float) inner, (float) outer,
-                                          color));
+                                          color, texture));
             }
         }
     }

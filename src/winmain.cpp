@@ -13,6 +13,7 @@
 #include <fstream>
 #include <cstdlib>
 #include <cctype>
+#include <cstring>
 #include <time.h>
 #include <windows.h>
 #include <commctrl.h>
@@ -35,19 +36,22 @@
 // Skeleton functions and variables.
 //-----------------
 char szAppName[] = "Celestia";
-float fTime=0.f, fDeltaTime=0.f;
+
 
 
 //----------------------------------
 // Timer info.
-LARGE_INTEGER TimerFreq;	// Timer Frequency.
-LARGE_INTEGER TimeStart;	// Time of start.
-LARGE_INTEGER TimeCur;		// Current time.
-
+static LARGE_INTEGER TimerFreq;	// Timer Frequency.
+static LARGE_INTEGER TimeStart;	// Time of start.
+static LARGE_INTEGER TimeCur;	// Current time.
+static double currentTime=0.0;
+static double deltaTime=0.0;
 
 static bool fullscreen;
 static int lastX = 0, lastY = 0;
 static int mouseMotion = 0;
+static double mouseWheelTime = -1000.0;
+static float mouseWheelMotion = 0.0f;
 float xrot = 0, yrot = 0;
 static bool upPress = false;
 static bool downPress = false;
@@ -61,6 +65,7 @@ static bool paused = false;
 static double timeScale = 0.0;
 
 static bool textEnterMode = false;
+static string typedText = "";
 
 static Point3f initialPosition(0, 0, 0);
 static Point3f position;
@@ -82,6 +87,8 @@ static HMENU menuBar = 0;
 static HACCEL acceleratorTable = 0;
 
 bool cursorVisible = true;
+
+astro::Date newTime(0.0);
 
 #define INFINITE_MOUSE
 
@@ -152,6 +159,14 @@ void ChangeDisplayMode()
 void RestoreDisplayMode()
 {
     ChangeDisplaySettings(0, 0);
+}
+
+
+static void SetFaintest(float magnitude)
+{
+    renderer->setBrightnessBias(0.0f);
+    renderer->setBrightnessScale(1.0f / (magnitude + 1.0f));
+    sim->setFaintestVisible(magnitude);
 }
 
 
@@ -227,6 +242,65 @@ BOOL APIENTRY LicenseProc(HWND hDlg,
 }
 
 
+BOOL APIENTRY GLInfoProc(HWND hDlg,
+                         UINT message,
+                         UINT wParam,
+                         LONG lParam)
+{
+    switch (message)
+    {
+    case WM_INITDIALOG:
+        {
+            char* vendor = (char*) glGetString(GL_VENDOR);
+            char* render = (char*) glGetString(GL_RENDERER);
+            char* version = (char*) glGetString(GL_VERSION);
+            char* ext = (char*) glGetString(GL_EXTENSIONS);
+            string s;
+            s += "Vendor: ";
+            if (vendor != NULL)
+                s += vendor;
+            s += "\r\r\n";
+            
+            s += "Renderer: ";
+            if (render != NULL)
+                s += render;
+            s += "\r\r\n";
+
+            s += "Version: ";
+            if (version != NULL)
+                s += version;
+            s += "\r\r\n";
+
+            s += "\r\r\nSupported Extensions:\r\r\n";
+            if (ext != NULL)
+            {
+                string extString(ext);
+                int pos = extString.find(' ', 0);
+                while (pos != string::npos)
+                {
+                    extString.replace(pos, 1, "\r\r\n");
+                    pos = extString.find(' ', pos);
+                }
+                s += extString;
+            }
+
+            SetDlgItemText(hDlg, IDC_GLINFO_TEXT, s.c_str());
+        }
+        return(TRUE);
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK)
+        {
+            EndDialog(hDlg, 0);
+            return TRUE;
+        }
+        break;
+    }
+
+    return FALSE;
+}
+
+
 BOOL APIENTRY FindObjectProc(HWND hDlg,
                              UINT message,
                              UINT wParam,
@@ -267,15 +341,62 @@ BOOL APIENTRY SetTimeProc(HWND hDlg,
     switch (message)
     {
     case WM_INITDIALOG:
+        {
+            SYSTEMTIME sysTime;
+            newTime = astro::Date(sim->getTime() / 86400.0);
+            sysTime.wYear = newTime.year;
+            sysTime.wMonth = newTime.month;
+            sysTime.wDay = newTime.day;
+            sysTime.wDayOfWeek = ((int) ((double) newTime + 0.5) + 1) % 7;
+            sysTime.wHour = newTime.hour;
+            sysTime.wMinute = newTime.minute;
+            sysTime.wSecond = (int) newTime.seconds;
+            sysTime.wMilliseconds = 0;
+
+            HWND hwnd = GetDlgItem(hDlg, IDC_DATEPICKER);
+            if (hwnd != NULL)
+            {
+                DateTime_SetFormat(hwnd, "dd' 'MMM' 'yyy");
+                DateTime_SetSystemtime(hwnd, GDT_VALID, &sysTime);
+            }
+            hwnd = GetDlgItem(hDlg, IDC_TIMEPICKER);
+            if (hwnd != NULL)
+            {
+                DateTime_SetFormat(hwnd, "HH':'mm':'ss' UT'");
+                DateTime_SetSystemtime(hwnd, GDT_VALID, &sysTime);
+            }
+        }
         return(TRUE);
 
     case WM_COMMAND:
         if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
         {
+            if (LOWORD(wParam) == IDOK)
+                sim->setTime((double) newTime * 86400.0);
             EndDialog(hDlg, 0);
             return TRUE;
         }
         break;
+
+    case WM_NOTIFY:
+        {
+            LPNMHDR hdr = (LPNMHDR) lParam;
+
+            if (hdr->code == DTN_DATETIMECHANGE)
+            {
+                LPNMDATETIMECHANGE change = (LPNMDATETIMECHANGE) lParam;
+                if (change->dwFlags == GDT_VALID)
+                {
+                    astro::Date date(change->st.wYear, change->st.wMonth, change->st.wDay);
+                    newTime.year = change->st.wYear;
+                    newTime.month = change->st.wMonth;
+                    newTime.day = change->st.wDay;
+                    newTime.hour = change->st.wHour;
+                    newTime.minute = change->st.wMinute;
+                    newTime.seconds = change->st.wSecond + (double) change->st.wMilliseconds / 1000.0;
+                }
+            }
+        }
     }
 
     return FALSE;
@@ -288,6 +409,35 @@ HMENU CreateMenuBar()
     return LoadMenu(appInstance, MAKEINTRESOURCE(IDR_MAIN_MENU));
 }
 
+
+static void ToggleLabelState(int menuItem, int labelState)
+{
+    if ((GetMenuState(menuBar, menuItem, MF_BYCOMMAND) & MF_CHECKED) == 0)
+    {
+        renderer->setLabelMode(renderer->getLabelMode() | labelState);
+        CheckMenuItem(menuBar, menuItem, MF_CHECKED);
+    }
+    else
+    {
+        renderer->setLabelMode(renderer->getLabelMode() & ~labelState);
+        CheckMenuItem(menuBar, menuItem, MF_UNCHECKED);
+    }
+}
+
+
+static bool ToggleMenuItem(int menuItem)
+{
+    if ((GetMenuState(menuBar, menuItem, MF_BYCOMMAND) & MF_CHECKED) == 0)
+    {
+        CheckMenuItem(menuBar, menuItem, MF_CHECKED);
+        return true;
+    }
+    else
+    {
+        CheckMenuItem(menuBar, menuItem, MF_UNCHECKED);
+        return false;
+    }
+}
 
 
 VOID APIENTRY handlePopupMenu(HWND hwnd, POINT point,
@@ -304,11 +454,82 @@ VOID APIENTRY handlePopupMenu(HWND hwnd, POINT point,
                    body->getName().c_str());
     }
 
-    ClientToScreen (hwnd, (LPPOINT) &point);
+    if (!fullscreen)
+        ClientToScreen(hwnd, (LPPOINT) &point);
 
     TrackPopupMenu (hMenu, 0, point.x, point.y, 0, hwnd, NULL);
 
     DestroyMenu (hMenu);
+}
+
+
+HMENU CreatePlanetarySystemMenu(const PlanetarySystem* planets)
+{
+    HMENU menu = CreatePopupMenu();
+    
+    for (int i = 0; i < planets->getSystemSize(); i++)
+    {
+        Body* body = planets->getBody(i);
+        AppendMenu(menu, MF_STRING, MENU_CHOOSE_PLANET + i,
+                   body->getName().c_str());
+    }
+
+    return menu;
+}
+
+
+VOID APIENTRY handlePopupMenu(HWND hwnd, POINT point,
+                              const Selection& sel)
+{
+    HMENU hMenu;
+    string name;
+
+    hMenu = CreatePopupMenu();
+
+    if (sel.body != NULL)
+    {
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_CENTER, sel.body->getName().c_str());
+        AppendMenu(hMenu, MF_SEPARATOR, 0, 0);
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_GOTO, "&Goto");
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_FOLLOW, "&Follow");
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_FOLLOW, "&Info");
+
+        const PlanetarySystem* satellites = sel.body->getSatellites();
+        if (satellites != NULL && satellites->getSystemSize() != 0)
+        {
+            HMENU satMenu = CreatePlanetarySystemMenu(satellites);
+            AppendMenu(hMenu, MF_POPUP | MF_STRING, (DWORD) satMenu,
+                       "&Satellites");
+        }
+    }
+    else if (sel.star != NULL)
+    {
+        name = starDB->getStarName(sel.star->getCatalogNumber());
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_CENTER, name.c_str());
+        AppendMenu(hMenu, MF_SEPARATOR, 0, 0);
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_GOTO, "&Goto");
+        AppendMenu(hMenu, MF_STRING, ID_NAVIGATION_FOLLOW, "&Info");
+
+        SolarSystemCatalog::iterator iter = solarSystemCatalog->find(sel.star->getCatalogNumber());
+        if (iter != solarSystemCatalog->end())
+        {
+            SolarSystem* solarSys = iter->second;
+            HMENU planetsMenu = CreatePlanetarySystemMenu(solarSys->getPlanets());
+            AppendMenu(hMenu,
+                       MF_POPUP | MF_STRING,
+                       (DWORD) planetsMenu,
+                       "&Planets");
+        }
+    }
+
+    ClientToScreen(hwnd, (LPPOINT) &point);
+
+    sim->setSelection(sel);
+    TrackPopupMenu(hMenu, 0, point.x, point.y, 0, hwnd, NULL);
+
+    // TODO: Do we need to explicitly destroy submenus or does DestroyMenu
+    // work recursively?
+    DestroyMenu(hMenu);
 }
 
 
@@ -338,18 +559,23 @@ void handleKey(WPARAM key, bool down)
 
 void handleKeyPress(int c)
 {
-    bool shift = ((GetKeyState(VK_SHIFT) & 0x8000) != 0);
     if (textEnterMode)
     {
         if (c == ' ' || isalpha(c) || isdigit(c) || ispunct(c))
         {
-            if (!shift && isalpha(c))
-                c = tolower(c);
-            sim->typeChar(c);
+            typedText += c;
+            renderer->getEntryConsole()->print(c);
+        }
+        else if (c == '\b')
+        {
+            if (typedText.size() > 0)
+                typedText = string(typedText, 0, typedText.size() - 1);
+            renderer->getEntryConsole()->backspace();
         }
         return;
     }
 
+    c = toupper(c);
     switch (c)
     {
     case 'A':
@@ -358,31 +584,6 @@ void handleKeyPress(int c)
         else
             sim->setTargetSpeed(sim->getTargetSpeed() * 10.0f);
         break;
-
-    case VK_F1:
-        sim->setTargetSpeed(0);
-        break;
-
-    case VK_F2:
-        sim->setTargetSpeed(astro::kilometersToLightYears(1.0));
-        break;
-
-    case VK_F3:
-        sim->setTargetSpeed(astro::kilometersToLightYears(1000.0));
-        break;
-
-    case VK_F4:
-        sim->setTargetSpeed(astro::kilometersToLightYears(1000000.0));
-        break;
-
-    case VK_F5:
-        sim->setTargetSpeed(astro::AUtoLightYears(1));
-        break;
-
-    case VK_F6:
-        sim->setTargetSpeed(1);
-        break;
-
     case 'Z':
         sim->setTargetSpeed(sim->getTargetSpeed() * 0.1f);
         break;
@@ -437,12 +638,30 @@ void handleKeyPress(int c)
         sim->setTimeScale(10.0 * sim->getTimeScale());
         break;
 
+    case 'J':
+        sim->setTimeScale(-sim->getTimeScale());
+        break;
+
+    case 'B':
+        ToggleLabelState(ID_RENDER_SHOWSTARLABELS, Renderer::StarLabels);
+        break;
+
     case 'N':
-        renderer->setLabelMode(renderer->getLabelMode() ^ Renderer::PlanetLabels);
+        ToggleLabelState(ID_RENDER_SHOWPLANETLABELS, Renderer::PlanetLabels);
         break;
 
     case 'O':
-        renderer->setLabelMode(renderer->getLabelMode() ^ Renderer::PlanetOrbits);
+        ToggleLabelState(ID_RENDER_SHOWORBITS, Renderer::PlanetOrbits);
+        break;
+
+    case 'P':
+        if (renderer->perPixelLightingSupported())
+        {
+            bool enabled = !renderer->getPerPixelLighting();
+            CheckMenuItem(menuBar, ID_RENDER_PERPIXEL_LIGHTING,
+                          enabled ? MF_CHECKED : MF_UNCHECKED);
+            renderer->setPerPixelLighting(enabled);
+        }
         break;
 
     case '1':
@@ -464,6 +683,16 @@ void handleKeyPress(int c)
     case 'W':
         wireframe = !wireframe;
         renderer->setRenderMode(wireframe ? GL_LINE : GL_FILL);
+        break;
+
+    case '[':
+        if (sim->getFaintestVisible() > 1.0f)
+            SetFaintest(sim->getFaintestVisible() - 0.5f);
+        break;
+
+    case ']':
+        if (sim->getFaintestVisible() < 8.0f)
+            SetFaintest(sim->getFaintestVisible() + 0.5f);
         break;
 
     case ' ':
@@ -623,9 +852,11 @@ int APIENTRY WinMain(HINSTANCE hInstance,
 
     sim = new Simulation();
     sim->setStarDatabase(starDB, solarSystemCatalog);
+    sim->setFaintestVisible(config->faintestVisible);
 
     // Set the simulation starting time to the current system time
     sim->setTime((double) time(NULL) + (double) astro::Date(1970, 1, 1) * 86400.0);
+    sim->update(0.0);
 
     if (!fullscreen)
     {
@@ -683,9 +914,15 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     if (!renderer->init((int) g_w, (int) g_h)) {
 	MessageBox(hWnd,
 		   "Failed to initialize",
-		   "Fatal Blow",
+		   "Fatal Error",
 		   MB_OK | MB_ICONERROR);
 	return FALSE;
+    }
+
+    if (renderer->perPixelLightingSupported())
+    {
+        renderer->setPerPixelLighting(true);
+        CheckMenuItem(menuBar, ID_RENDER_PERPIXEL_LIGHTING, MF_CHECKED);
     }
 
     // Set up the star labels
@@ -698,8 +935,19 @@ int APIENTRY WinMain(HINSTANCE hInstance,
             renderer->addLabelledStar(star);
     }
 
+    renderer->setBrightnessBias(0.0f);
+    renderer->setBrightnessScale(1.0f / (config->faintestVisible + 1.0f));
+
     // We're now ready.
     bReady = 1;
+
+    // Start out at Mir
+    sim->selectBody("Mir");
+    sim->gotoSelection();
+    sim->setTimeScale(0.0f);
+    sim->update(5.0);
+    sim->setTimeScale(1.0f);
+    sim->follow();
 
     // Usual running around in circles bit...
     int bGotMsg;
@@ -708,8 +956,8 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     while (msg.message != WM_QUIT)
     {
 	// Use PeekMessage() if the app is active, so we can use idle time to
-	// render the scene. Else, use GetMessage() to avoid eating CPU time.
-	bGotMsg = PeekMessage( &msg, NULL, 0U, 0U, PM_REMOVE );
+	// render the scene.  Else, use GetMessage() to avoid eating CPU time.
+	bGotMsg = PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE);
 
 	if (bGotMsg)
         {
@@ -731,36 +979,6 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     renderer->shutdown();
 
     return msg.wParam;
-}
-
-
-static void ToggleLabelState(int menuItem, int labelState)
-{
-    if ((GetMenuState(menuBar, menuItem, MF_BYCOMMAND) & MF_CHECKED) == 0)
-    {
-        renderer->setLabelMode(renderer->getLabelMode() | labelState);
-        CheckMenuItem(menuBar, menuItem, MF_CHECKED);
-    }
-    else
-    {
-        renderer->setLabelMode(renderer->getLabelMode() & ~labelState);
-        CheckMenuItem(menuBar, menuItem, MF_UNCHECKED);
-    }
-}
-
-
-static bool ToggleMenuItem(int menuItem)
-{
-    if ((GetMenuState(menuBar, menuItem, MF_BYCOMMAND) & MF_CHECKED) == 0)
-    {
-        CheckMenuItem(menuBar, menuItem, MF_CHECKED);
-        return true;
-    }
-    else
-    {
-        CheckMenuItem(menuBar, menuItem, MF_UNCHECKED);
-        return false;
-    }
 }
 
 
@@ -789,10 +1007,31 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
 	    x = LOWORD(lParam);
 	    y = HIWORD(lParam);
 
-            if ((wParam & (MK_LBUTTON | MK_RBUTTON)) == (MK_LBUTTON|MK_RBUTTON))
+            if ((wParam & (MK_LBUTTON | MK_RBUTTON)) == (MK_LBUTTON | MK_RBUTTON) ||
+                (wParam & (MK_LBUTTON | MK_CONTROL)) == (MK_LBUTTON | MK_CONTROL))
             {
                 float amount = (float) (lastY - y) / g_h;
                 sim->changeOrbitDistance(amount * 5);
+            }
+            else if ((wParam & (MK_LBUTTON | MK_SHIFT)) == (MK_LBUTTON | MK_SHIFT))
+            {
+                // Zoom control
+                float amount = (float) (lastY - y) / g_h;
+                float minFOV = 0.01f;
+                float maxFOV = 120.0f;
+                float fov = renderer->getFieldOfView();
+
+                if (fov < minFOV)
+                    fov = minFOV;
+
+                // In order for the zoom to have the right feel, it should be
+                // exponential.
+                float newFOV = minFOV + (float) exp(log(fov - minFOV) + amount * 4);
+                if (newFOV < minFOV)
+                    newFOV = minFOV;
+                else if (newFOV > maxFOV)
+                    newFOV = maxFOV;
+                renderer->setFieldOfView(newFOV);
             }
             else
             {
@@ -850,6 +1089,7 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
                                                  HIWORD(lParam));
             Selection oldSel = sim->getSelection();
             Selection newSel = sim->pickObject(pickRay);
+            sim->setSelection(newSel);
             if (!oldSel.empty() && oldSel == newSel)
                 sim->centerSelection();
         }
@@ -872,27 +1112,21 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
             POINT pt;
             pt.x = LOWORD(lParam);
             pt.y = HIWORD(lParam);
-            SolarSystem* solarsys = sim->getNearestSolarSystem();
-            if (solarsys != NULL)
-                handlePopupMenu(hWnd, pt, *solarsys);
+            Vec3f pickRay = renderer->getPickRay(LOWORD(lParam),
+                                                 HIWORD(lParam));
+            Selection sel = sim->pickObject(pickRay);
+            if (!sel.empty())
+                handlePopupMenu(hWnd, pt, sel);
         }
         break;
 
     case WM_MOUSEWHEEL:
-        // The mouse wheel controls the zoom
+        // The mouse wheel controls the range to target
         {
             short wheelMove = (short) HIWORD(wParam);
-            float factor = 1.0f;
-            if (wheelMove > 0)
-            {
-                if (renderer->getFieldOfView() > 0.1f)
-                    renderer->setFieldOfView(renderer->getFieldOfView() / 1.1f);
-            }
-            else if (wheelMove < 0)
-            {
-                if (renderer->getFieldOfView() < 120.0f)
-                    renderer->setFieldOfView(renderer->getFieldOfView() * 1.1f);
-            }
+            float factor = wheelMove > 0 ? -1.0f : 1.0f;
+            mouseWheelTime = currentTime;
+            mouseWheelMotion = factor * 0.25f;
         }
         break;
 
@@ -904,11 +1138,24 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
         switch (wParam)
         {
         case VK_ESCAPE:
-	    DestroyWindow(hWnd);
+            sim->cancelMotion();
             break;
         case VK_RETURN:
             if (textEnterMode)
-                sim->typeChar('\n');
+            {
+                if (typedText != "")
+                {
+                    sim->selectBody(typedText);
+                    typedText = "";
+                }
+                renderer->getEntryConsole()->clear();
+            }
+            else
+            {
+                renderer->getEntryConsole()->home();
+                renderer->getEntryConsole()->clear();
+                renderer->getEntryConsole()->printf("Target name: ");
+            }
             textEnterMode = !textEnterMode;
             break;
         case VK_UP:
@@ -919,10 +1166,31 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
         case VK_END:
             handleKey(wParam, true);
             break;
-        default:
-            handleKeyPress(wParam);
+
+        case VK_F1:
+            sim->setTargetSpeed(0);
+            break;
+        case VK_F2:
+            sim->setTargetSpeed(astro::kilometersToLightYears(1.0));
+            break;
+        case VK_F3:
+            sim->setTargetSpeed(astro::kilometersToLightYears(1000.0));
+            break;
+        case VK_F4:
+            sim->setTargetSpeed(astro::kilometersToLightYears(1000000.0));
+            break;
+        case VK_F5:
+            sim->setTargetSpeed(astro::AUtoLightYears(1));
+            break;
+        case VK_F6:
+            sim->setTargetSpeed(1);
+            break;
         }
 	break;
+
+    case WM_CHAR:
+        handleKeyPress(wParam);
+        break;
 
     case WM_COMMAND:
         switch (LOWORD(wParam))
@@ -974,6 +1242,15 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
             CheckMenuItem(menuBar, ID_RENDER_AMBIENTLIGHT_MEDIUM, MF_CHECKED);
             renderer->setAmbientLightLevel(0.25f);
             break;
+        case ID_RENDER_PERPIXEL_LIGHTING:
+            if (renderer->perPixelLightingSupported())
+            {
+                bool enabled = !renderer->getPerPixelLighting();
+                CheckMenuItem(menuBar, ID_RENDER_PERPIXEL_LIGHTING,
+                              enabled ? MF_CHECKED : MF_UNCHECKED);
+                renderer->setPerPixelLighting(enabled);
+            }
+            break;
 
         case ID_TIME_FASTER:
             sim->setTimeScale(10.0 * sim->getTimeScale());
@@ -998,12 +1275,19 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
             }
             paused = !paused;
             break;
+        case ID_TIME_REVERSE:
+            sim->setTimeScale(-sim->getTimeScale());
+            break;
         case ID_TIME_SETTIME:
             DialogBox(appInstance, MAKEINTRESOURCE(IDD_SETTIME), hWnd, SetTimeProc);
             break;
 
         case ID_HELP_ABOUT:
             DialogBox(appInstance, MAKEINTRESOURCE(IDD_ABOUT), hWnd, AboutProc);
+            break;
+
+        case ID_HELP_GLINFO:
+            DialogBox(appInstance, MAKEINTRESOURCE(IDD_GLINFO), hWnd, GLInfoProc);
             break;
 
         case ID_HELP_LICENSE:
@@ -1043,22 +1327,39 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
 	break;
 
     case WM_PAINT:
-	if (bReady) {
+	if (bReady)
+        {
 	    // Get the current time, and update the time controller.
 	    QueryPerformanceCounter(&TimeCur);
-	    float fOldTime = fTime;
-	    fTime = (float)((double)(TimeCur.QuadPart-TimeStart.QuadPart)/(double)TimerFreq.QuadPart);
-	    fDeltaTime = fTime - fOldTime;
+	    double lastTime = currentTime;
+	    currentTime = (double) (TimeCur.QuadPart - TimeStart.QuadPart) / (double) TimerFreq.QuadPart;
+	    double deltaTime = currentTime - lastTime;
+
+            if (mouseWheelMotion != 0.0f)
+            {
+                double mouseWheelSpan = 0.1;
+                double fraction;
+                
+                if (currentTime - mouseWheelTime >= mouseWheelSpan)
+                    fraction = (mouseWheelTime + mouseWheelSpan) - lastTime;
+                else
+                    fraction = deltaTime / mouseWheelSpan;
+
+                sim->changeOrbitDistance(mouseWheelMotion * (float) fraction);
+                cout << "Mouse wheel: " << fraction << '\n';
+                if (currentTime - mouseWheelTime >= mouseWheelSpan)
+                    mouseWheelMotion = 0.0f;
+            }
 
             Quatf q(1);
 	    if (leftPress)
-		q.zrotate(fDeltaTime * 2);
+		q.zrotate((float) deltaTime * 2);
 	    if (rightPress)
-		q.zrotate(fDeltaTime * -2);
+		q.zrotate((float) deltaTime * -2);
             if (downPress)
-                q.xrotate(fDeltaTime * 2);
+                q.xrotate((float) deltaTime * 2);
             if (upPress)
-                q.xrotate(fDeltaTime * -2);
+                q.xrotate((float) deltaTime * -2);
             sim->setOrientation(sim->getOrientation() * q);
             position = Point3f(0, 0, distanceFromCenter) * conjugate(sim->getOrientation()).toMatrix4();
 
@@ -1066,9 +1367,9 @@ LRESULT CALLBACK SkeletonProc(HWND hWnd,
 
             // cap the time step at 0.05 secs--extremely long time steps
             // may make the simulation unstable
-            if (fDeltaTime > 0.05f)
-                fDeltaTime = 0.05f;
-            sim->update((double) fDeltaTime);
+            if (deltaTime > 0.05)
+                deltaTime = 0.05;
+            sim->update(deltaTime);
 	    sim->render(*renderer);
 	    SwapBuffers(hDC);
 

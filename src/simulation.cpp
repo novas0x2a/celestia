@@ -27,7 +27,6 @@ Simulation::Simulation() :
     realTime(0.0),
     simTime(0.0),
     timeScale(1.0),
-    typedText(""),
     stardb(NULL),
     solarSystemCatalog(NULL),
     visibleStars(NULL),
@@ -38,7 +37,8 @@ Simulation::Simulation() :
     initialVelocity(0.0, 0.0, 0.0),
     beginAccelTime(0.0),
     observerMode(Free),
-    hudDetail(1)
+    hudDetail(1),
+    faintestVisible(5.0f)
 {
 }
 
@@ -139,6 +139,14 @@ void  Simulation::render(Renderer& renderer)
     console->clear();
     console->home();
 
+    // Temporary hack, just for this version . . .
+    if (realTime < 15.0)
+    {
+        console->printf("Welcome to Celestia 1.05 (Mir Edition)\n");
+        console->printf("Right drag mouse to rotate around Mir\n");
+        console->printf("Hit ESC to stop tracking Mir and explore the rest of the universe\n\n");
+    }
+
     if (hudDetail > 0)
     {
         console->printf("Visible stars = %d\n", visibleStars->getVisibleSet()->size());
@@ -173,9 +181,6 @@ void  Simulation::render(Renderer& renderer)
         *console << astro::Date(simTime / 86400.0) << '\n';
 
         displaySelectionInfo(*console);
-        
-        *console << typedText;
-
     }
 
     renderer.render(observer,
@@ -268,14 +273,20 @@ void Simulation::setStarDatabase(StarDatabase* db,
     if (db != NULL)
     {
         visibleStars = new VisibleStarSet(stardb);
-        visibleStars->setLimitingMagnitude(5.0f);
+        visibleStars->setLimitingMagnitude(faintestVisible);
         visibleStars->setCloseDistance(10.0f);
         visibleStars->updateAll(observer);
     }
 }
 
 
-// Set the time in seconds from J2000
+// Get the time in seconds (JD * 86400)
+double Simulation::getTime() const
+{
+    return simTime;
+}
+
+// Set the time in seconds (JD * 86400)
 void Simulation::setTime(double t)
 {
     simTime = t;
@@ -405,13 +416,14 @@ void Simulation::setSelection(const Selection& sel)
 struct PlanetPickInfo
 {
     float cosClosestAngle;
+    double closestDistance;
     Body* closestBody;
     Vec3d direction;
     Point3d origin;
     double jd;
 };
 
-bool PlanetPickTraversal(Body* body, void* info)
+bool ApproxPlanetPickTraversal(Body* body, void* info)
 {
     PlanetPickInfo* pickInfo = (PlanetPickInfo*) info;
 
@@ -423,6 +435,32 @@ bool PlanetPickTraversal(Body* body, void* info)
     {
         pickInfo->cosClosestAngle = cosAngle;
         pickInfo->closestBody = body;
+    }
+
+    return true;
+}
+
+
+// Perform an intersection test between the pick ray and a body
+bool ExactPlanetPickTraversal(Body* body, void* info)
+{
+    PlanetPickInfo* pickInfo = (PlanetPickInfo*) info;
+
+    Point3d bpos = body->getHeliocentricPosition(pickInfo->jd);
+    Vec3d bodyDir = bpos - pickInfo->origin;
+
+    // This intersection test naively assumes that the body is spherical.
+    double v = bodyDir * pickInfo->direction;
+    double disc = square(body->getRadius()) - ((bodyDir * bodyDir) - square(v));
+
+    if (disc > 0.0)
+    {
+        double distance = v - sqrt(disc);
+        if (distance > 0.0 && distance < pickInfo->closestDistance)
+        {
+            pickInfo->closestDistance = distance;
+            pickInfo->closestBody = body;
+        }
     }
 
     return true;
@@ -444,16 +482,31 @@ Selection Simulation::pickPlanet(Observer& observer,
     pickInfo.origin    = astro::heliocentricPosition(observer.getPosition(),
                                                      sun.getPosition());
     pickInfo.cosClosestAngle = -1.0f;
+    pickInfo.closestDistance = 1.0e50;
     pickInfo.closestBody = NULL;
     pickInfo.jd = simTime / 86400.0f;
 
-    solarSystem.getPlanets()->traverse(PlanetPickTraversal, (void*) &pickInfo);
-    if (pickInfo.cosClosestAngle > cos(degToRad(0.5f)))
-        selection = Selection(pickInfo.closestBody);
-    else
-        selection = Selection();
+    // First see if there's a planet that the pick ray intersects.
+    // Select the closest planet intersected.
+    solarSystem.getPlanets()->traverse(ExactPlanetPickTraversal,
+                                       (void*) &pickInfo);
+    if (pickInfo.closestBody != NULL)
+    {
+        return Selection(pickInfo.closestBody);
+    }
 
-    return selection;
+    // If no planet was intersected by the pick ray, choose the planet
+    // with the smallest angular separation from the pick ray.  Very distant
+    // planets are likley to fail the intersection test even if the user
+    // clicks on a pixel where the planet's disc has been rendered--in order
+    // to make distant planets visible on the screen at all, their apparent size
+    // has to be greater than their actual disc size.
+    solarSystem.getPlanets()->traverse(ApproxPlanetPickTraversal,
+                                       (void*) &pickInfo);
+    if (pickInfo.cosClosestAngle > cos(degToRad(0.5f)))
+        return Selection(pickInfo.closestBody);
+    else
+        return Selection();
 }
 
 
@@ -486,15 +539,9 @@ Selection Simulation::pickStar(Vec3f pickRay)
     }
 
     if (cosAngleClosest > cos(degToRad(0.5f)))
-    {
-        selection = Selection(stardb->getStar(closest));
-    }
+        return Selection(stardb->getStar(closest));
     else
-    {
-        selection = Selection();
-    }
-
-    return selection;
+        return Selection();
 }
 
 
@@ -502,36 +549,37 @@ Selection Simulation::pickObject(Vec3f pickRay)
 {
     Point3f observerPos = (Point3f) observer.getPosition();
     vector<uint32>* closeStars = visibleStars->getCloseSet();
+    Selection sel;
+
     for (int i = 0; i < closeStars->size(); i++)
     {
         uint32 starIndex = (*closeStars)[i];
         Star* star = stardb->getStar(starIndex);
+
+        // Only attempt to pick planets if the star is less
+        // than one light year away.  Seems like a reasonable limit . . .
         if (observerPos.distanceTo(star->getPosition()) < 1.0f)
         {
             SolarSystem* solarSystem = getSolarSystem(star);
             if (solarSystem != NULL)
-            {
-                pickPlanet(observer, *star, *solarSystem, pickRay);
-            }
+                sel = pickPlanet(observer, *star, *solarSystem, pickRay);
         }
     }
 
-    if (selection.body == NULL)
-        return pickStar(pickRay);
-    else
-        return selection;
+    if (sel.empty())
+        sel = pickStar(pickRay);
+
+    return sel;
 }
 
 
 void Simulation::computeGotoParameters(Selection& destination, JourneyParams& jparams)
 {
     UniversalCoord targetPosition = getSelectionPosition(selection, simTime);
-
     Vec3d v = targetPosition - observer.getPosition();
     double distanceToTarget = v.length();
     double maxOrbitDistance = (selection.body != NULL) ? astro::kilometersToLightYears(5.0f * selection.body->getRadius()) : 0.5f;
     double orbitDistance = (distanceToTarget > maxOrbitDistance * 10.0f) ? maxOrbitDistance : distanceToTarget * 0.1f;
-
 
     v.normalize();
 
@@ -631,6 +679,9 @@ void Simulation::orbit(Quatf q)
         v *= distance;
 
         observer.setPosition(focusPosition + v);
+
+        if (observerMode == Following)
+            followInfo.offset = v * astro::lightYearsToKilometers(1.0);
     }
 }
 
@@ -659,6 +710,9 @@ void Simulation::changeOrbitDistance(float d)
             double newDistance = minOrbitDistance + naturalOrbitDistance * exp(log(r) + d);
             v = v * (newDistance / currentDistance);
             observer.setPosition(focusPosition + v);
+
+            if (observerMode == Following)
+                followInfo.offset = v * astro::lightYearsToKilometers(1.0);
         }
     }
 }
@@ -685,6 +739,11 @@ void Simulation::gotoSelection()
         computeGotoParameters(selection, journey);
         observerMode = Travelling;
     }
+}
+
+void Simulation::cancelMotion()
+{
+    observerMode = Free;
 }
 
 void Simulation::centerSelection()
@@ -779,20 +838,6 @@ void Simulation::selectBody(string s)
 }
 
 
-void Simulation::typeChar(char c)
-{
-    if (c == '\n')
-    {
-        selectBody(typedText);
-        typedText = "";
-    }
-    else
-    {
-        typedText += c;
-    }
-}
-
-
 double Simulation::getTimeScale()
 {
     return timeScale;
@@ -801,6 +846,18 @@ double Simulation::getTimeScale()
 void Simulation::setTimeScale(double _timeScale)
 {
     timeScale = _timeScale;
+}
+
+
+float Simulation::getFaintestVisible() const
+{
+    return faintestVisible;
+}
+
+void Simulation::setFaintestVisible(float magnitude)
+{
+    faintestVisible = magnitude;
+    visibleStars->setLimitingMagnitude(faintestVisible);
 }
 
 

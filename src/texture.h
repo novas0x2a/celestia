@@ -11,8 +11,8 @@
 #define _TEXTURE_H_
 
 #include <string>
+#include "basictypes.h"
 
-using namespace std;
 
 typedef void (*ProceduralTexEval)(float, float, float, unsigned char*);
 
@@ -22,8 +22,14 @@ class CTexture
     CTexture(int w, int h, int fmt);
     ~CTexture();
 
-    void bindName();
+    enum {
+        WrapTexture      = 0x1,
+        CompressTexture  = 0x2,
+    };
+
+    void bindName(uint32 flags = 0);
     unsigned int getName();
+    void normalMap(float scale, bool wrap);
 
     enum {
         ColorChannel = 1,
@@ -35,6 +41,7 @@ class CTexture
     int height;
     int components;
     int format;
+    bool isNormalMap;
     unsigned char* pixels;
 
     int cmapEntries;
@@ -51,8 +58,11 @@ extern CTexture* CreateProceduralTexture(int width, int height,
 extern CTexture* CreateJPEGTexture(const char* filename,
                                    int channels = CTexture::ColorChannel);
 extern CTexture* CreateBMPTexture(const char* filename);
+extern CTexture* CreatePNGTexture(const std::string& filename);
 
-extern CTexture* LoadTextureFromFile(string filename);
+extern CTexture* LoadTextureFromFile(const std::string& filename);
 
+extern CTexture* CreateNormalizationCubeMap(int size);
+extern CTexture* CreateDiffuseLightCubeMap(int size);
 
 #endif // _TEXTURE_H_

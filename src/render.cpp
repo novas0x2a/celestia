@@ -17,6 +17,7 @@
 #include "texfont.h"
 #include "console.h"
 #include "gui.h"
+#include "regcombine.h"
 #include "render.h"
 
 using namespace std;
@@ -25,20 +26,25 @@ using namespace std;
 #define NEAR_DIST      0.5f
 #define FAR_DIST     3000.0f
 
-#define RENDER_DISTANCE 10.0f
+#define RENDER_DISTANCE 50.0f
+
+#define FAINTEST_MAGNITUDE  5.5f
 
 // Static meshes and textures used by all instances of Simulation
 
 static bool commonDataInitialized = false;
 
-#define SPHERE_LODS 4
+#define SPHERE_LODS 5
 
 static SphereMesh* sphereMesh[SPHERE_LODS];
 static SphereMesh* asteroidMesh = NULL;
 
+static CTexture* normalizationTex = NULL;
+static CTexture* diffuseLightTex = NULL;
+static CTexture* smoothTex = NULL;
+
 static CTexture* starTex = NULL;
 static CTexture* glareTex = NULL;
-static CTexture* ringsTex = NULL;
 static CTexture* shadowTex = NULL;
 
 static TexFont* font;
@@ -51,12 +57,20 @@ Renderer::Renderer() :
     renderMode(GL_FILL),
     labelMode(NoLabels),
     ambientLightLevel(0.1f),
+    brightnessScale(1.0f / 6.0f),
+    brightnessBias(0.0f),
+    perPixelLightingEnabled(false),
     console(NULL),
-    nSimultaneousTextures(1)
+    entryConsole(NULL),
+    nSimultaneousTextures(1),
+    useRegisterCombiners(false),
+    useCubeMaps(false)
 {
     textureManager = new TextureManager("textures");
     meshManager = new MeshManager("models");
     console = new Console(30, 100);
+    entryConsole = new Console(2, 100);
+    entryConsole->setOrigin(0.0f, 0.85f);
 }
 
 
@@ -68,14 +82,9 @@ Renderer::~Renderer()
 static void BlueTextureEval(float u, float v, float w,
                             unsigned char *pixel)
 {
-    float t = turbulence(Point2f(u, v), 32) + 0.0f;
-    if (t > 1)
-        t = 1;
-
-    int pixVal = (int) (t * 255.99f);
-    pixel[0] = 0;
-    pixel[1] = 0;
-    pixel[2] = pixVal;
+    pixel[0] = 128;
+    pixel[1] = 128;
+    pixel[2] = 255;
 }
 
 static void StarTextureEval(float u, float v, float w,
@@ -154,6 +163,7 @@ bool Renderer::init(int winWidth, int winHeight)
         sphereMesh[1] = new SphereMesh(1.0f, 21, 20);
         sphereMesh[2] = new SphereMesh(1.0f, 31, 30);
         sphereMesh[3] = new SphereMesh(1.0f, 41, 40);
+        sphereMesh[4] = new SphereMesh(1.0f, 81, 80);
         asteroidMesh = new SphereMesh(Vec3f(0.7f, 1.1f, 1.0f),
                                       21, 20,
                                       AsteroidDisplacementFunc,
@@ -162,7 +172,7 @@ bool Renderer::init(int winWidth, int winHeight)
         starTex = CreateProceduralTexture(64, 64, GL_RGB, StarTextureEval);
         starTex->bindName();
 
-        glareTex = CreateJPEGTexture("textures\\glare.jpg");
+        glareTex = CreateJPEGTexture("textures\\flare.jpg");
         if (glareTex == NULL)
             glareTex = CreateProceduralTexture(64, 64, GL_RGB, GlareTextureEval);
         glareTex->bindName();
@@ -170,19 +180,25 @@ bool Renderer::init(int winWidth, int winHeight)
         shadowTex = CreateProceduralTexture(256, 256, GL_RGB, ShadowTextureEval);
         shadowTex->bindName();
 
-        ringsTex = CreateJPEGTexture("textures\\rings.jpg",
-                                     CTexture::ColorChannel | CTexture::AlphaChannel);
-        if (ringsTex != NULL)
-            ringsTex->bindName();
+        // Create a smooth bump map
+        smoothTex = CreateProceduralTexture(4, 4, GL_RGB, BlueTextureEval);
+        smoothTex->bindName();
 
         // font = txfLoadFont("fonts\\helvetica_14b.txf");
         font = txfLoadFont("fonts\\default.txf");
         if (font != NULL)
             txfEstablishTexture(font, 0, GL_TRUE);
 
+        // Initialize GL extensions
         if (ExtensionSupported("GL_ARB_multitexture"))
             InitExtMultiTexture();
-
+        if (ExtensionSupported("GL_NV_register_combiners"))
+            InitExtRegisterCombiners();
+        if (ExtensionSupported("GL_EXT_texture_cube_map"))
+        {
+            normalizationTex = CreateNormalizationCubeMap(64);
+            // diffuseLightTex = CreateDiffuseLightCubeMap(64);
+        }
 
         commonDataInitialized = true;
     }
@@ -192,7 +208,20 @@ bool Renderer::init(int winWidth, int winHeight)
 
     // Get GL extension information
     if (ExtensionSupported("GL_ARB_multitexture"))
+    {
+        DPRINTF("Renderer: multi-texture supported.\n");
         glGetIntegerv(GL_MAX_TEXTURE_UNITS_ARB, &nSimultaneousTextures);
+    }
+    if (ExtensionSupported("GL_NV_register_combiners"))
+    {
+        DPRINTF("Renderer: nVidia register combiners supported.\n");
+        useRegisterCombiners = true;
+    }
+    if (ExtensionSupported("GL_EXT_texture_cube_map"))
+    {
+        DPRINTF("Renderer: cube texture maps supported.\n");
+        useCubeMaps = true;
+    }
 
     cout << "Simultaneous textures supported: " << nSimultaneousTextures << '\n';
 
@@ -204,12 +233,16 @@ bool Renderer::init(int winWidth, int winHeight)
     glEnable(GL_COLOR_MATERIAL);
     glEnable(GL_LIGHTING);
 
+    // LEQUAL rather than LESS required for multipass rendering
+    glDepthFunc(GL_LEQUAL);
+
     // We need this enabled because we use glScale, but only
     // with uniform scale factors
     // TODO: Do a proper check for this extension before enabling
     glEnable(GL_RESCALE_NORMAL_EXT);
 
     console->setFont(font);
+    entryConsole->setFont(font);
 
     resize(winWidth, winHeight);
 
@@ -258,9 +291,14 @@ Vec3f Renderer::getPickRay(int winX, int winY)
 }
 
 
-Console* Renderer::getConsole()
+Console* Renderer::getConsole() const
 {
     return console;
+}
+
+Console* Renderer::getEntryConsole() const
+{
+    return entryConsole;
 }
 
 
@@ -297,6 +335,22 @@ float Renderer::getAmbientLightLevel() const
 void Renderer::setAmbientLightLevel(float level)
 {
     ambientLightLevel = level;
+}
+
+
+bool Renderer::getPerPixelLighting() const
+{
+    return perPixelLightingEnabled;
+}
+
+void Renderer::setPerPixelLighting(bool enable)
+{
+    perPixelLightingEnabled = enable && perPixelLightingSupported();
+}
+
+bool Renderer::perPixelLightingSupported() const
+{
+    return useCubeMaps && useRegisterCombiners;
 }
 
 
@@ -497,6 +551,7 @@ void Renderer::render(const Observer& observer,
             opos = Vec3d(astro::lightYearsToAU(opos.x) * 100,
                          astro::lightYearsToAU(opos.y) * 100,
                          astro::lightYearsToAU(opos.z) * 100);
+            glPushMatrix();
             glTranslated(-opos.x, -opos.y, -opos.z);
         
             glDisable(GL_LIGHTING);
@@ -529,10 +584,33 @@ void Renderer::render(const Observer& observer,
                     glEnd();
                 }
             }
+
+            glPopMatrix();
         }
     }
 
     glPopMatrix();
+
+#ifdef DISPLAY_AXES
+    glDisable(GL_LIGHTING);
+    glDisable(GL_TEXTURE_2D);
+    {
+        Point3f orig(-0.5f, -0.5f, -2);
+        Mat3f m = conjugate(observer.getOrientation()).toMatrix3();
+
+        glBegin(GL_LINES);
+        glColor4f(1, 0, 0, 1);
+        glVertex(orig);
+        glVertex(orig - Vec3f(0.2f, 0, 0) * m);
+        glColor4f(0, 1, 0, 1);
+        glVertex(orig);
+        glVertex(orig - Vec3f(0, 0.2f, 0) * m);
+        glColor4f(0, 0, 1, 1);
+        glVertex(orig);
+        glVertex(orig - Vec3f(0, 0, 0.2f) * m);
+        glEnd();
+    }
+#endif
 
     glEnable(GL_TEXTURE_2D);
     glDisable(GL_LIGHTING);
@@ -546,6 +624,10 @@ void Renderer::render(const Observer& observer,
     glColor4f(0.8f, 0.8f, 1.0f, 1);
     console->setScale(2.0f / (float) windowWidth, 2.0f / (float) windowHeight);
     console->render();
+
+    glColor4f(0.7f, 0.7f, 1.0f, 1);
+    entryConsole->setScale(2.0f / (float) windowWidth, 2.0f / (float) windowHeight);
+    entryConsole->render();
 
     glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
@@ -621,7 +703,7 @@ void Renderer::renderBodyAsParticle(Point3f position,
         }
         else
         {
-            a = clamp(1.0f - appMag / 6.0f);
+            a = clamp(1.0f - appMag * brightnessScale + brightnessBias);
         }
 
         // We scale up the particle by a factor of 3 so that it's more visible--the
@@ -691,6 +773,179 @@ void Renderer::renderBodyAsParticle(Point3f position,
 }
 
 
+static void renderBumpMappedMesh(Mesh& mesh,
+                                 CTexture& bumpTexture,
+                                 Vec3f lightDirection,
+                                 Quatf orientation,
+                                 Color ambientColor)
+{
+    // We're doing our own per-pixel lighting, so disable GL's lighting
+    glDisable(GL_LIGHTING);
+
+    // Render the base texture on the first pass . . .  The base
+    // texture and color should have been set up already by the
+    // caller.
+    mesh.render();
+
+    // The 'default' light vector for the bump map is (0, 0, 1).  Determine
+    // a rotation transformation that will move the sun direction to
+    // this vector.
+    Quatf lightOrientation;
+    {
+        Vec3f zeroLightDirection(0, 0, 1);
+        Vec3f axis = lightDirection ^ zeroLightDirection;
+        float cosAngle = zeroLightDirection * lightDirection;
+        float angle = 0.0f;
+        float epsilon = 1e-5f;
+
+        if (cosAngle + 1 < epsilon)
+        {
+            axis = Vec3f(0, 1, 0);
+            angle = (float) PI;
+        }
+        else if (cosAngle - 1 > -epsilon)
+        {
+            axis = Vec3f(0, 1, 0);
+            angle = 0.0f;
+        }
+        else
+        {
+            axis.normalize();
+            angle = (float) acos(cosAngle);
+        }
+        lightOrientation.setAxisAngle(axis, angle);
+    }
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_DST_COLOR, GL_ZERO);
+
+    // Set up the bump map with one directional light source
+    SetupCombinersBumpMap(bumpTexture, *normalizationTex, ambientColor);
+
+    // The second set texture coordinates will contain the light
+    // direction in tangent space.  We'll generate the texture coordinates
+    // from the surface normals using GL_NORMAL_MAP_EXT and then
+    // use the texture matrix to rotate them into tangent space.
+    // This method of generating tangent space light direction vectors
+    // isn't as general as transforming the light direction by an
+    // orthonormal basis for each mesh vertex, but it works well enough
+    // for spheres illuminated by directional light sources.
+    glActiveTextureARB(GL_TEXTURE1_ARB);
+
+    // Set up GL_NORMAL_MAP_EXT texture coordinate generation.  This
+    // mode is part of the cube map extension.
+    glEnable(GL_TEXTURE_GEN_R);
+    glTexGeni(GL_R, GL_TEXTURE_GEN_MODE, GL_NORMAL_MAP_EXT);
+    glEnable(GL_TEXTURE_GEN_S);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_NORMAL_MAP_EXT);
+    glEnable(GL_TEXTURE_GEN_T);
+    glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_NORMAL_MAP_EXT);
+
+    // Set up the texture transformation--the light direction and the
+    // viewer orientation both need to be considered.
+    glMatrixMode(GL_TEXTURE);
+    glRotate(lightOrientation * orientation);
+    glMatrixMode(GL_MODELVIEW);
+    glActiveTextureARB(GL_TEXTURE0_ARB);
+
+    mesh.render();
+
+    // Reset the second texture unit
+    glActiveTextureARB(GL_TEXTURE1_ARB);
+    glMatrixMode(GL_TEXTURE);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glDisable(GL_TEXTURE_GEN_R);
+    glDisable(GL_TEXTURE_GEN_S);
+    glDisable(GL_TEXTURE_GEN_T);
+
+    DisableCombiners();
+    glDisable(GL_BLEND);
+}
+
+
+static void renderSmoothMesh(Mesh& mesh,
+                             CTexture& baseTexture,
+                             Vec3f lightDirection,
+                             Quatf orientation,
+                             Color ambientColor)
+{
+    // We're doing our own per-pixel lighting, so disable GL's lighting
+    glDisable(GL_LIGHTING);
+
+    // The 'default' light vector for the bump map is (0, 0, 1).  Determine
+    // a rotation transformation that will move the sun direction to
+    // this vector.
+    Quatf lightOrientation;
+    {
+        Vec3f zeroLightDirection(0, 0, 1);
+        Vec3f axis = lightDirection ^ zeroLightDirection;
+        float cosAngle = zeroLightDirection * lightDirection;
+        float angle = 0.0f;
+        float epsilon = 1e-5f;
+
+        if (cosAngle + 1 < epsilon)
+        {
+            axis = Vec3f(0, 1, 0);
+            angle = (float) PI;
+        }
+        else if (cosAngle - 1 > -epsilon)
+        {
+            axis = Vec3f(0, 1, 0);
+            angle = 0.0f;
+        }
+        else
+        {
+            axis.normalize();
+            angle = (float) acos(cosAngle);
+        }
+        lightOrientation.setAxisAngle(axis, angle);
+    }
+
+    SetupCombinersSmooth(baseTexture, *normalizationTex, ambientColor);
+
+    // The second set texture coordinates will contain the light
+    // direction in tangent space.  We'll generate the texture coordinates
+    // from the surface normals using GL_NORMAL_MAP_EXT and then
+    // use the texture matrix to rotate them into tangent space.
+    // This method of generating tangent space light direction vectors
+    // isn't as general as transforming the light direction by an
+    // orthonormal basis for each mesh vertex, but it works well enough
+    // for spheres illuminated by directional light sources.
+    glActiveTextureARB(GL_TEXTURE1_ARB);
+
+    // Set up GL_NORMAL_MAP_EXT texture coordinate generation.  This
+    // mode is part of the cube map extension.
+    glEnable(GL_TEXTURE_GEN_R);
+    glTexGeni(GL_R, GL_TEXTURE_GEN_MODE, GL_NORMAL_MAP_EXT);
+    glEnable(GL_TEXTURE_GEN_S);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_NORMAL_MAP_EXT);
+    glEnable(GL_TEXTURE_GEN_T);
+    glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_NORMAL_MAP_EXT);
+
+    // Set up the texture transformation--the light direction and the
+    // viewer orientation both need to be considered.
+    glMatrixMode(GL_TEXTURE);
+    glRotate(lightOrientation * orientation);
+    glMatrixMode(GL_MODELVIEW);
+    glActiveTextureARB(GL_TEXTURE0_ARB);
+
+    mesh.render();
+
+    // Reset the second texture unit
+    glActiveTextureARB(GL_TEXTURE1_ARB);
+    glMatrixMode(GL_TEXTURE);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glDisable(GL_TEXTURE_GEN_R);
+    glDisable(GL_TEXTURE_GEN_S);
+    glDisable(GL_TEXTURE_GEN_T);
+
+    DisableCombiners();
+}
+
+
+
 void Renderer::renderPlanet(const Body& body,
                             Point3f pos,
                             Vec3f sunDirection,
@@ -714,12 +969,27 @@ void Renderer::renderPlanet(const Body& body,
         glLightColor(GL_LIGHT0, GL_DIFFUSE, Vec3f(1.0f, 1.0f, 1.0f));
         glEnable(GL_LIGHT0);
 
+        const Surface& surface = body.getSurface();
         // Get the texture . . .
         CTexture* tex = NULL;
-        if (body.getTexture() != "")
+        CTexture* bumpTex = NULL;
+        if (surface.baseTexture != "")
         {
-            if (!textureManager->find(body.getTexture(), &tex))
-                tex = textureManager->load(body.getTexture());
+            if (!textureManager->find(surface.baseTexture, &tex))
+            {
+                bool compress = ((surface.appearanceFlags & Surface::CompressBaseTexture) != 0);
+                tex = textureManager->load(surface.baseTexture, compress);
+            }
+        }
+
+        // If this renderer can support bump mapping then get the bump texture
+        if ((surface.appearanceFlags & Surface::ApplyBumpMap) != 0 &&
+            (perPixelLightingEnabled && useRegisterCombiners && useCubeMaps) &&
+            surface.bumpTexture != "")
+        {
+            if (!textureManager->find(surface.bumpTexture, &bumpTex))
+                bumpTex = textureManager->loadBumpMap(surface.bumpTexture,
+                                                      surface.bumpHeight);
         }
 
         if (tex == NULL)
@@ -732,8 +1002,8 @@ void Renderer::renderPlanet(const Body& body,
             glBindTexture(GL_TEXTURE_2D, tex->getName());
         }
 
-        if (tex == NULL || body.getAppearanceFlag(Body::BlendTexture))
-            glColor(body.getColor());
+        if (tex == NULL || (surface.appearanceFlags & Surface::BlendTexture) != 0)
+            glColor(surface.color);
         else
             glColor4f(1, 1, 1, 1);
 
@@ -775,8 +1045,10 @@ void Renderer::renderPlanet(const Body& body,
                 lod = 1;
             else if (discSizeInPixels < 200)
                 lod = 2;
-            else
+            else if (discSizeInPixels < 400)
                 lod = 3;
+            else
+                lod = 4;
     
             if (body.getRadius() < 50)
                 mesh = asteroidMesh;
@@ -790,7 +1062,42 @@ void Renderer::renderPlanet(const Body& body,
         }
 
         if (mesh != NULL)
-            mesh->render();
+        {
+            if (perPixelLightingEnabled)
+            {
+                Color ambientColor(ambientLightLevel, ambientLightLevel, ambientLightLevel);
+#if 0
+                renderBumpMappedMesh(*mesh,
+                                     bumpTex == NULL ? *smoothTex : *bumpTex,
+                                     sunDirection, orientation,
+                                     ambientColor);
+#endif
+                if (bumpTex != NULL)
+                {
+                    renderBumpMappedMesh(*mesh,
+                                         *bumpTex,
+                                         sunDirection, orientation,
+                                         ambientColor);
+                }
+                else if (tex != NULL)
+                {
+                    renderSmoothMesh(*mesh,
+                                     *tex,
+                                     sunDirection, orientation,
+                                     ambientColor);
+                }
+                else
+                {
+                    mesh->render();
+                }
+
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+            }
+            else
+            {
+                mesh->render();
+            }
+        }
 
         // If the planet has a ring system, render it.
         if (body.getRings() != NULL)
@@ -868,6 +1175,14 @@ void Renderer::renderPlanet(const Body& body,
 
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+            CTexture* ringsTex = NULL;
+            if (rings->texture != "")
+            {
+                if (!textureManager->find(rings->texture, &ringsTex))
+                    ringsTex = textureManager->load(rings->texture);
+            }
+
             if (ringsTex != NULL)
                 glBindTexture(GL_TEXTURE_2D, ringsTex->getName());
             else
@@ -935,7 +1250,7 @@ void Renderer::renderPlanet(const Body& body,
     renderBodyAsParticle(pos,
                          appMag,
                          discSizeInPixels,
-                         body.getColor(),
+                         body.getSurface().color,
                          orientation,
                          false);
 #if 0
@@ -958,7 +1273,7 @@ void Renderer::renderPlanet(const Body& body,
         }
         else
         {
-            a = clamp(1.0f - appMag / 6.0f);
+            a = clamp(1.0f - appMag * brightnessScale + brightnessBias);
         }
 
         // We scale up the particle by a factor of 3 so that it's more visible--the
@@ -1129,7 +1444,7 @@ void Renderer::renderPlanetarySystem(const Star& sun,
         // Compute the size of the planet/moon disc in pixels
         float discSize = (body->getRadius() / (float) distanceFromObserver) / (pixelSize / NEAR_DIST);
 
-        if (discSize > 1 || appMag < 6.0f)
+        if (discSize > 1 || appMag < 1.0f / brightnessScale)
         {
             RenderListEntry rle;
             rle.body = body;
@@ -1141,19 +1456,6 @@ void Renderer::renderPlanetarySystem(const Star& sun,
             rle.appMag = appMag;
             renderList.insert(renderList.end(), rle);
         }
-#if 0
-        else
-        {
-            float r = 1, g = 1, b = 1;
-            float a = clamp(1.0f - appMag / 6.0f);
-
-            Particle p;
-            p.center = Point3f(pos.x, pos.y, pos.z);
-            p.size = (float) RENDER_DISTANCE * size;
-            p.color = Color(body->getColor(), a);
-            planetParticles.insert(planetParticles.end(), p);
-        }
-#endif
         
         if (showLabels && (pos * conjugate(observer.getOrientation()).toMatrix3()).z < 0)
         {
@@ -1185,10 +1487,10 @@ void Renderer::renderStars(const StarDatabase& starDB,
     vector<uint32>* vis = visset.getVisibleSet();
     int nStars = vis->size();
     Point3f observerPos = (Point3f) observer.getPosition();
-    Vec3f relPos;
+    Vec3f viewNormal = Vec3f(0, 0, -1) * observer.getOrientation().toMatrix3();
 
     float size = pixelSize * 3.0f;
-    Mat3f m = conjugate(observer.getOrientation()).toMatrix3().transpose();
+    Mat3f m = observer.getOrientation().toMatrix3();
     Vec3f v0 = Vec3f(-1, -1, 0) * m;
     Vec3f v1 = Vec3f( 1, -1, 0) * m;
     Vec3f v2 = Vec3f( 1,  1, 0) * m;
@@ -1201,86 +1503,90 @@ void Renderer::renderStars(const StarDatabase& starDB,
     {
         Star* star = starDB.getStar((*vis)[i]);
         Point3f pos = star->getPosition();
-        float distance = pos.distanceTo(observerPos);
-
-        Color starColor = star->getStellarClass().getApparentColor();
-        float alpha = 0.0f;
-        float renderDistance = distance;
-        float s = renderDistance * size;
-        float discSizeInPixels = 0.0f;
-
-        // Special handling for stars less than one light year away . . .
-        // We can't just go ahead and render a nearby star in the usual way
-        // for two reasons:
-        //   * It may be clipped by the near plane
-        //   * It may be large enough that we should render it as a mesh instead
-        //     of a particle
-        // It's possible that the second condition might apply for stars further
-        // than one light year away if the star is huge, the fov is very small,
-        // and the resolution is high.  We'll ignore this for now and use the
-        // most inexpensive test possible . . .
-        if (distance < 1.0f)
+        Vec3f relPos = pos - observerPos;
+        if (relPos * viewNormal > 0 || relPos.x * relPos.x < 0.1f)
         {
-            // Compute the position of the observer relative to the star.
-            // This is a much more accurate (and expensive) distance
-            // calculation than the previous one which used the observer's
-            // position rounded off to floats.
-            relPos = pos - observer.getPosition();
-            distance = relPos.length();
+            float distance = relPos.length();
 
-            float f = RENDER_DISTANCE / distance;
-            renderDistance = RENDER_DISTANCE;
-            pos = observerPos + relPos * f;
+            Color starColor = star->getStellarClass().getApparentColor();
+            float alpha = 0.0f;
+            float renderDistance = distance;
+            float s = renderDistance * size;
+            float discSizeInPixels = 0.0f;
 
-            float radius = star->getRadius();
-            // s = renderDistance * size + astro::kilometersToLightYears(radius * f);
-            discSizeInPixels = radius / astro::lightYearsToKilometers(distance) /
-                (pixelSize / NEAR_DIST);
-        }
-
-        float appMag = astro::lumToAppMag(star->getLuminosity(), distance);
-        
-        alpha = clamp(1.0f - appMag / 6.0f);
-
-        if (discSizeInPixels <= 1)
-        {
-            Particle p;
-            p.center = pos;
-            p.size = renderDistance * size;
-            p.color = Color(starColor, alpha);
-            starParticles.insert(starParticles.end(), p);
-
-            // If the star is brighter than magnitude 1, add a halo around it to
-            // make it appear more brilliant.  This is a hack to compensate for the
-            // limited dynamic range of monitors.
-            if (appMag < 1.0f)
+            // Special handling for stars less than one light year away . . .
+            // We can't just go ahead and render a nearby star in the usual way
+            // for two reasons:
+            //   * It may be clipped by the near plane
+            //   * It may be large enough that we should render it as a mesh instead
+            //     of a particle
+            // It's possible that the second condition might apply for stars further
+            // than one light year away if the star is huge, the fov is very small,
+            // and the resolution is high.  We'll ignore this for now and use the
+            // most inexpensive test possible . . .
+            if (distance < 1.0f)
             {
-                alpha = 0.4f * clamp((appMag - 1) * -0.8f);
-                s = renderDistance * 0.001f * (3 - (appMag - 1)) * 2;
+                // Compute the position of the observer relative to the star.
+                // This is a much more accurate (and expensive) distance
+                // calculation than the previous one which used the observer's
+                // position rounded off to floats.
+                relPos = pos - observer.getPosition();
+                distance = relPos.length();
 
-                if (s > p.size * 3)
-                    p.size = s;
-                else
-                    p.size = p.size * 3;
-                p.color = Color(starColor, alpha);
-                glareParticles.insert(glareParticles.end(), p);
+                float f = RENDER_DISTANCE / distance;
+                renderDistance = RENDER_DISTANCE;
+                pos = observerPos + relPos * f;
+
+                float radius = star->getRadius();
+                // s = renderDistance * size + astro::kilometersToLightYears(radius * f);
+                discSizeInPixels = radius / astro::lightYearsToKilometers(distance) /
+                    (pixelSize / NEAR_DIST);
             }
-        }
-        else
-        {
-            RenderListEntry rle;
-            rle.star = star;
-            rle.body = NULL;
 
-            // Objects in the render list are always rendered relative to a viewer
-            // at the origin--this is different than for distance stars.
-            float scale = RENDER_DISTANCE / distance;
-            rle.position = Point3f(relPos.x * scale, relPos.y * scale, relPos.z * scale);
+            float appMag = astro::lumToAppMag(star->getLuminosity(), distance);
+        
+            alpha = clamp(1.0f - appMag * brightnessScale + brightnessBias);
 
-            rle.distance = astro::lightYearsToKilometers(distance);
-            rle.discSizeInPixels = discSizeInPixels;
-            rle.appMag = appMag;
-            renderList.insert(renderList.end(), rle);
+            if (discSizeInPixels <= 1)
+            {
+                Particle p;
+                p.center = pos;
+                p.size = renderDistance * size;
+                p.color = Color(starColor, alpha);
+                starParticles.insert(starParticles.end(), p);
+
+                // If the star is brighter than magnitude 1, add a halo around it to
+                // make it appear more brilliant.  This is a hack to compensate for the
+                // limited dynamic range of monitors.
+                if (appMag < 1.0f)
+                {
+                    alpha = 0.4f * clamp((appMag - 1) * -0.8f);
+                    s = renderDistance * 0.001f * (3 - (appMag - 1)) * 2;
+
+                    if (s > p.size * 3)
+                        p.size = s;
+                    else
+                        p.size = p.size * 3;
+                    p.color = Color(starColor, alpha);
+                    glareParticles.insert(glareParticles.end(), p);
+                }
+            }
+            else
+            {
+                RenderListEntry rle;
+                rle.star = star;
+                rle.body = NULL;
+
+                // Objects in the render list are always rendered relative to a viewer
+                // at the origin--this is different than for distance stars.
+                float scale = RENDER_DISTANCE / distance;
+                rle.position = Point3f(relPos.x * scale, relPos.y * scale, relPos.z * scale);
+
+                rle.distance = astro::lightYearsToKilometers(distance);
+                rle.discSizeInPixels = discSizeInPixels;
+                rle.appMag = appMag;
+                renderList.insert(renderList.end(), rle);
+            }
         }
     }
 
@@ -1382,4 +1688,25 @@ void Renderer::renderLabels()
     glMatrixMode(GL_PROJECTION);
     glPopMatrix();
     glMatrixMode(GL_MODELVIEW);
+}
+
+
+float Renderer::getBrightnessScale() const
+{
+    return brightnessScale;
+}
+
+void Renderer::setBrightnessScale(float scale)
+{
+    brightnessScale = scale;
+}
+
+float Renderer::getBrightnessBias() const
+{
+    return brightnessBias;
+}
+
+void Renderer::setBrightnessBias(float bias)
+{
+    brightnessBias = bias;
 }

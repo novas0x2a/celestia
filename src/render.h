@@ -47,7 +47,8 @@ class Renderer
     // Convert window coordinates to a ray for picking
     Vec3f getPickRay(int winX, int winY);
 
-    Console* getConsole();
+    Console* getConsole() const;
+    Console* getEntryConsole() const;
 
     enum {
         NoLabels = 0,
@@ -61,6 +62,14 @@ class Renderer
     void clearLabelledStars();
     float getAmbientLightLevel() const;
     void setAmbientLightLevel(float);
+    bool getPerPixelLighting() const;
+    void setPerPixelLighting(bool);
+    bool perPixelLightingSupported() const;
+
+    float getBrightnessScale() const;
+    void setBrightnessScale(float);
+    float getBrightnessBias() const;
+    void setBrightnessBias(float);
 
     typedef struct {
         string text;
@@ -144,10 +153,14 @@ class Renderer
     TextureManager* textureManager;
     MeshManager* meshManager;
     Console* console;
+    Console* entryConsole;
 
     int renderMode;
     int labelMode;
     float ambientLightLevel;
+    bool perPixelLightingEnabled;
+    float brightnessBias;
+    float brightnessScale;
 
     vector<RenderListEntry> renderList;
     vector<Particle> starParticles;
@@ -161,6 +174,9 @@ class Renderer
     double projMatrix[16];
 
     int nSimultaneousTextures;
+    bool useRegisterCombiners;
+    bool useCubeMaps;
+    bool useCompressedTextures;
 
  public:
     friend bool operator<(const Renderer::RenderListEntry&,

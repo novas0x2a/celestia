@@ -9,9 +9,11 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
 #include <algorithm>
 #include "celestia.h"
 #include "mathlib.h"
+#include "util.h"
 #include "stardb.h"
 
 using namespace std;
@@ -89,7 +91,7 @@ Star* StarDatabase::find(string name) const
         for (StarNameDatabase::const_iterator iter = names->begin();
              iter != names->end(); iter++)
         {
-            if (iter->second->getName() == name)
+            if (compareIgnoringCase(iter->second->getName(), name) == 0)
             {
                 return find(iter->first);
             }
@@ -98,8 +100,8 @@ Star* StarDatabase::find(string name) const
                 Constellation* con = iter->second->getConstellation();
                 if (con != NULL)
                 {
-                    if (con->getAbbreviation() == conAbbrev &&
-                        iter->second->getDesignation() == designation)
+                    if (compareIgnoringCase(con->getAbbreviation(), conAbbrev) == 0 &&
+                        compareIgnoringCase(iter->second->getDesignation(), designation) == 0)
                     {
                         return find(iter->first);
                     }
@@ -136,16 +138,23 @@ string StarDatabase::getStarName(uint32 catalogNumber) const
             name += constellation->getGenitive();
             return name;
         }
-        //return starName->getDesignation + " " + constellation->getGenitive();
     }
 
-    return "";
-#if 0
-    if ((star.getCatalogNumber() & 0xf0000000) == 0)
-        console << "HD " << star.getCatalogNumber() << '\n';
-    else
-        console << "HIP " << (star.getCatalogNumber() & 0x0fffffff) << '\n';
-#endif
+    char buf[20];
+    switch ((catalogNumber & 0xf0000000) >> 28)
+    {
+    case 0:
+        sprintf(buf, "HD %d", catalogNumber);
+        break;
+    case 1:
+        sprintf(buf, "HIP %d", catalogNumber & 0x0fffffff);
+        break;
+    default:
+        sprintf(buf, "? %d", catalogNumber & 0x0fffffff);
+        break;
+    }
+
+    return string(buf);
 }
 
 
@@ -185,6 +194,8 @@ StarDatabase *StarDatabase::read(istream& in)
     uint32 throwOut = 0;
     uint32 fixUp = 0;
 
+    Mat3f equatorialToEcliptical = Mat3f::xrotation(degToRad(-23.4392911));
+
     while (db->nStars < MAX_STARS)
     {
 	uint32 catNo = 0;
@@ -215,7 +226,8 @@ StarDatabase *StarDatabase::read(istream& in)
 	double x = -cos(theta) * sin(phi) * distance;
 	double y = -cos(phi) * distance;
 	double z = -sin(theta) * sin(phi) * distance;
-	star->setPosition((float) x, (float) y, (float) z);
+	star->setPosition(Point3f((float) x, (float) y, (float) z) *
+                          equatorialToEcliptical);
 
 	// Use apparent magnitude and distance to determine the absolute
 	// magnitude of the star.
