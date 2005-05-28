@@ -3422,6 +3422,18 @@ static int celestia_print(lua_State* l)
     return 0;
 }
 
+static int celestia_gettextwidth(lua_State* l)
+{
+    checkArgs(l, 2, 2, "One argument expected to function celestia:gettextwidth");
+
+    CelestiaCore* appCore = this_celestia(l);
+    const char* s = safeGetString(l, 2, AllErrors, "First argument to celestia:gettextwidth must be a string");
+
+    lua_pushnumber(l, appCore->getTextWidth(s));
+
+    return 1;
+}
+
 static int celestia_show(lua_State* l)
 {
     checkArgs(l, 1, 1000, "Wrong number of arguments to celestia:show");
@@ -4410,52 +4422,45 @@ static int celestia_takescreenshot(lua_State* l)
             fileid[i] = '_';
     }
     // limit length of string
-    if (fileid.length() > 8)
-        fileid = fileid.substr(0, 8);
+    if (fileid.length() > 16)
+        fileid = fileid.substr(0, 16);
     if (fileid.length() > 0)
         fileid.append("-");
 
-    int maxCount = (int) appCore->getConfig()->scriptScreenshotCount;
-    if ((luastate->screenshotCount < maxCount)  || (maxCount == -1))
-    {
-        string path = appCore->getConfig()->scriptScreenshotDirectory;
-        if (path.length() > 0 && 
-            path[path.length()-1] != '/' && 
-            path[path.length()-1] != '\\')
+    string path = appCore->getConfig()->scriptScreenshotDirectory;
+    if (path.length() > 0 && 
+        path[path.length()-1] != '/' && 
+        path[path.length()-1] != '\\')
 
-            path.append("/");
+        path.append("/");
 
-            luastate->screenshotCount++;
-        bool success = false;
-        char filenamestem[32];
-        sprintf(filenamestem, "screenshot-%s%06i", fileid.c_str(), luastate->screenshotCount);
+    luastate->screenshotCount++;
+    bool success = false;
+    char filenamestem[48];
+    sprintf(filenamestem, "screenshot-%s%06i", fileid.c_str(), luastate->screenshotCount);
 
-        // Get the dimensions of the current viewport
-        int viewport[4];
-        glGetIntegerv(GL_VIEWPORT, viewport);
+    // Get the dimensions of the current viewport
+    int viewport[4];
+    glGetIntegerv(GL_VIEWPORT, viewport);
 
 #ifndef MACOSX
-        if (strncmp(filetype, "jpg", 3) == 0)
-        {
-            string filepath = path + filenamestem + ".jpg";
-            success = CaptureGLBufferToJPEG(string(filepath),
-                                           viewport[0], viewport[1],
-                                           viewport[2], viewport[3]);
-        }
-        else
-        {
-            string filepath = path + filenamestem + ".png";
-            success = CaptureGLBufferToPNG(string(filepath),
-                                           viewport[0], viewport[1],
-                                           viewport[2], viewport[3]);
-        }
-#endif
-        lua_pushboolean(l, success);
+    if (strncmp(filetype, "jpg", 3) == 0)
+    {
+        string filepath = path + filenamestem + ".jpg";
+        success = CaptureGLBufferToJPEG(string(filepath),
+                                       viewport[0], viewport[1],
+                                       viewport[2], viewport[3]);
     }
     else
     {
-        lua_pushboolean(l, false);
+        string filepath = path + filenamestem + ".png";
+        success = CaptureGLBufferToPNG(string(filepath),
+                                       viewport[0], viewport[1],
+                                       viewport[2], viewport[3]);
     }
+#endif
+    lua_pushboolean(l, success);
+
     // no matter how long it really took, make it look like 0.1s to timeout check:
     luastate->timeout = luastate->getTime() + timeToTimeout - 0.1;
     return 1;
@@ -4502,6 +4507,7 @@ static void CreateCelestiaMetaTable(lua_State* l)
     RegisterMethod(l, "__tostring", celestia_tostring);
     RegisterMethod(l, "flash", celestia_flash);
     RegisterMethod(l, "print", celestia_print);
+    RegisterMethod(l, "gettextwidth", celestia_gettextwidth);
     RegisterMethod(l, "show", celestia_show);
     RegisterMethod(l, "hide", celestia_hide);
     RegisterMethod(l, "getrenderflags", celestia_getrenderflags);

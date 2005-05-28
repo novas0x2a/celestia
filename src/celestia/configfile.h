@@ -37,7 +37,6 @@ struct CelestiaConfig
     std::vector<std::string> ignoreGLExtensions;
     float rotateAcceleration;
     float mouseRotationSensitivity;
-    float scriptScreenshotCount;
     std::string scriptScreenshotDirectory;
     std::string scriptSystemAccessPolicy;
 
@@ -57,6 +56,6 @@ struct CelestiaConfig
 };
 
 
-CelestiaConfig* ReadCelestiaConfig(std::string filename);
+CelestiaConfig* ReadCelestiaConfig(std::string filename, CelestiaConfig* config = NULL);
 
 #endif // _CONFIGFILE_H_

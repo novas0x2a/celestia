@@ -1490,6 +1490,12 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
         }
         break;
 
+    case '^':
+        renderer->setRenderFlags(renderer->getRenderFlags() ^ Renderer::ShowNebulae);
+        notifyWatchers(RenderFlagsChanged);
+        break;
+
+
     case '&':
         renderer->setLabelMode(renderer->getLabelMode() ^ Renderer::LocationLabels);
         notifyWatchers(LabelFlagsChanged);
@@ -1808,6 +1814,8 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
         addToHistory();
         sim->chase();
         break;
+
+
 
     case '[':
         if ((renderer->getRenderFlags() & Renderer::ShowAutoMag) == 0)
@@ -2464,6 +2472,10 @@ void CelestiaCore::showText(string s,
     messageDuration = duration;
 }
 
+int CelestiaCore::getTextWidth(string s) const
+{
+    return titleFont->getWidth(s);
+}
 
 static FormattedNumber SigDigitNum(double v, int digits)
 {
@@ -3568,6 +3580,10 @@ bool CelestiaCore::initSimulation()
 #endif
 
     config = ReadCelestiaConfig("celestia.cfg");
+    std::string localConfigFile = WordExp("~/.celestia.cfg");
+    if (localConfigFile != "") {
+        ReadCelestiaConfig(localConfigFile.c_str(), config);
+    }
     if (config == NULL)
     {
         fatalError("Error reading configuration file.");;
@@ -4187,7 +4203,7 @@ void CelestiaCore::addToHistory()
         }
     }
     history.push_back(url);
-    historyCurrent = history.size();
+    historyCurrent = history.size() - 1;
     notifyWatchers(HistoryChanged);
 }
 
@@ -4195,7 +4211,7 @@ void CelestiaCore::addToHistory()
 void CelestiaCore::back()
 {
     if (historyCurrent == 0) return;
-    if (historyCurrent == history.size())
+    if (historyCurrent == history.size() - 1)
     {
         addToHistory();
         historyCurrent = history.size()-1;

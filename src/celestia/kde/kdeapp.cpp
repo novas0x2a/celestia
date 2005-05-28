@@ -97,11 +97,32 @@ static uint32 FilterOtherLocations = ~(Location::City |
 
 KdeApp::KdeApp(QWidget *parent, const char *name) : KMainWindow(parent, name)
 {
-#if KDE_VERSION >= 0x030200 
-    QPixmap splash_pixmap(locate("appdata", "celestia-splash.jpg"));
-    KSplashScreen *splash = new KSplashScreen(splash_pixmap);
-    splash->show();
-    splash->message( i18n("Loading..."), Qt::AlignBottom | Qt::AlignAuto, QColor(255,255,255) );
+#if KDE_VERSION >= 0x030200
+    QStringList splashDirs = KGlobal::dirs()->findDirs("appdata", "splash");
+    QStringList images;
+    srandom(time(NULL));
+    for(QStringList::iterator i = splashDirs.begin(); i != splashDirs.end(); ++i) {
+        QDir d(*i);
+        d.setFilter(QDir::Files);
+        QStringList splashImages = d.entryList().grep(QRegExp("\\.jpg$", FALSE));
+        for(QStringList::iterator j = splashImages.begin(); j != splashImages.end(); ++j) {
+            images.append(*i + *j);
+        }
+    }
+    
+    KSplashScreen *splash = NULL;
+    if (images.size() > 0) {
+        int index = (int)(random()*1./RAND_MAX*images.size());   
+        QPixmap splash_pixmap(images[index]);
+        splash = new KSplashScreen(splash_pixmap);
+        
+        if (splash != NULL) {
+            splash->show();
+            splash->message( i18n("Loading..."), Qt::AlignBottom | Qt::AlignAuto, QColor(255,255,255) );
+        }
+    } else {
+        KMessageBox::queuedMessageBox(this, KMessageBox::Information, i18n("Something seems to be wrong with your installation of Celestia. The splash screen directory couldn't be found. \nStart-up will continue, but Celestia will probably be missing some data files and may not work correctly, please check your installation."));
+    }
 #endif
     
     appCore=new CelestiaCore();
@@ -152,8 +173,10 @@ KdeApp::KdeApp(QWidget *parent, const char *name) : KMainWindow(parent, name)
     if (menuBar()->isHidden()) toggleMenubar->setChecked(false);
 
 #if KDE_VERSION >= 0x030200
-    splash->finish(this);
-    delete splash;
+    if (splash != NULL) {
+        splash->finish(this);
+        delete splash;
+    }
 #endif
     
     // We use a timer with a null timeout value
@@ -216,13 +239,13 @@ void KdeWatcher::notifyChange(CelestiaCore * core, int property)
                      CelestiaCore::LabelFlagsChanged|
                      CelestiaCore::TimeZoneChanged)))
         kdeapp->resyncMenus();
-    else if (property & CelestiaCore::AmbientLightChanged)
+    if (property & CelestiaCore::AmbientLightChanged)
         kdeapp->resyncAmbient();
-    else if (property & CelestiaCore::FaintestChanged)
+    if (property & CelestiaCore::FaintestChanged)
         kdeapp->resyncFaintest();
-    else if (property & CelestiaCore::VerbosityLevelChanged)
+    if (property & CelestiaCore::VerbosityLevelChanged)
         kdeapp->resyncVerbosity();
-    else if (property & CelestiaCore::HistoryChanged)
+    if (property & CelestiaCore::HistoryChanged)
         kdeapp->resyncHistory();
 
     if (property == CelestiaCore::TextEnterModeChanged) {
@@ -267,6 +290,9 @@ void KdeApp::resyncMenus() {
     ((KToggleAction*)action("showStars"))->setChecked(rFlags & Renderer::ShowStars);
     ((KToggleAction*)action("showPlanets"))->setChecked(rFlags & Renderer::ShowPlanets);
     ((KToggleAction*)action("showGalaxies"))->setChecked(rFlags & Renderer::ShowGalaxies);
+    ((KToggleAction*)action("showPartialTrajectories"))->setChecked(rFlags & Renderer::ShowPartialTrajectories);
+    ((KToggleAction*)action("showNebulae"))->setChecked(rFlags & Renderer::ShowNebulae);
+    ((KToggleAction*)action("showOpenClusters"))->setChecked(rFlags & Renderer::ShowOpenClusters);
     ((KToggleAction*)action("showDiagrams"))->setChecked(rFlags & Renderer::ShowDiagrams);
     ((KToggleAction*)action("showCloudMaps"))->setChecked(rFlags & Renderer::ShowCloudMaps);
     ((KToggleAction*)action("showOrbits"))->setChecked(rFlags & Renderer::ShowOrbits);
@@ -293,6 +319,8 @@ void KdeApp::resyncMenus() {
     ((KToggleAction*)action("showCometLabels"))->setChecked(lMode & Renderer::CometLabels);
     ((KToggleAction*)action("showConstellationLabels"))->setChecked(lMode & Renderer::ConstellationLabels);
     ((KToggleAction*)action("showGalaxyLabels"))->setChecked(lMode & Renderer::GalaxyLabels);
+    ((KToggleAction*)action("showNebulaLabels"))->setChecked(lMode & Renderer::NebulaLabels);
+    ((KToggleAction*)action("showOpenClusterLabels"))->setChecked(lMode & Renderer::OpenClusterLabels);
     ((KToggleAction*)action("showAsteroidLabels"))->setChecked(lMode & Renderer::AsteroidLabels);
     ((KToggleAction*)action("showSpacecraftLabels"))->setChecked(lMode & Renderer::SpacecraftLabels);
     ((KToggleAction*)action("showLocationLabels"))->setChecked(lMode & Renderer::LocationLabels);
@@ -468,6 +496,15 @@ void KdeApp::initActions()
     KToggleAction* showGalaxies = new KToggleAction(i18n("Show Galaxies"), Key_U, this, SLOT(slotShowGalaxies()), actionCollection(), "showGalaxies");
     showGalaxies->setChecked(rFlags & Renderer::ShowGalaxies);
 
+    KToggleAction* showPartialTrajectories = new KToggleAction(i18n("Show Partial Trajectories"), 0, this, SLOT(slotShowPartialTrajectories()), actionCollection(), "showPartialTrajectories");
+    showPartialTrajectories->setChecked(rFlags & Renderer::ShowPartialTrajectories);
+
+    KToggleAction* showNebulae = new KToggleAction(i18n("Show Nebulae"), Key_AsciiCircum, this, SLOT(slotShowNebulae()), actionCollection(), "showNebulae");
+    showNebulae->setChecked(rFlags & Renderer::ShowNebulae);
+
+    KToggleAction* showOpenClusters = new KToggleAction(i18n("Show Open Clusters"), 0, this, SLOT(slotShowOpenClusters()), actionCollection(), "showOpenClusters");
+    showOpenClusters->setChecked(rFlags & Renderer::ShowOpenClusters);
+
     KToggleAction* showDiagrams = new KToggleAction(i18n("Show Constellations"), Key_Slash, this, SLOT(slotShowDiagrams()), actionCollection(), "showDiagrams");
     showDiagrams->setChecked(rFlags & Renderer::ShowDiagrams);
 
@@ -543,6 +580,12 @@ void KdeApp::initActions()
     
     KToggleAction* showGalaxyLabels = new KToggleAction(i18n("Show Galaxy Labels"), Key_E, this, SLOT(slotShowGalaxyLabels()), actionCollection(), "showGalaxyLabels");
     showGalaxyLabels->setChecked(lMode & Renderer::GalaxyLabels);
+
+    KToggleAction* showNebulaLabels = new KToggleAction(i18n("Show Nebula Labels"), 0, this, SLOT(slotShowNebulaLabels()), actionCollection(), "showNebulaLabels");
+    showNebulaLabels->setChecked(lMode & Renderer::NebulaLabels);
+
+    KToggleAction* showOpenClusterLabels = new KToggleAction(i18n("Show Open Cluster Labels"), 0, this, SLOT(slotShowOpenClusterLabels()), actionCollection(), "showOpenClusterLabels");
+    showOpenClusterLabels->setChecked(lMode & Renderer::OpenClusterLabels);
 
     KToggleAction* showAsteroidLabels = new KToggleAction(i18n("Show Asteroid Labels"), Key_W, this, SLOT(slotShowAsteroidLabels()), actionCollection(), "showAsteroidLabels");
     showAsteroidLabels->setChecked(lMode & Renderer::AsteroidLabels);
@@ -628,7 +671,6 @@ void KdeApp::initActions()
 
     bookmarkBar = 0;
     initBookmarkBar();    
-
 }
 
 void KdeApp::initBookmarkBar() {
@@ -930,6 +972,21 @@ void KdeApp::slotShowGalaxies() {
             appCore->getRenderer()->getRenderFlags() ^ Renderer::ShowGalaxies);
 }
 
+void KdeApp::slotShowPartialTrajectories() {
+     appCore->getRenderer()->setRenderFlags(
+            appCore->getRenderer()->getRenderFlags() ^ Renderer::ShowPartialTrajectories);
+}
+
+void KdeApp::slotShowNebulae() {
+     appCore->getRenderer()->setRenderFlags(
+            appCore->getRenderer()->getRenderFlags() ^ Renderer::ShowNebulae);
+}
+
+void KdeApp::slotShowOpenClusters() {
+     appCore->getRenderer()->setRenderFlags(
+            appCore->getRenderer()->getRenderFlags() ^ Renderer::ShowOpenClusters);
+}
+
 void KdeApp::slotShowDiagrams() {
      appCore->getRenderer()->setRenderFlags(
             appCore->getRenderer()->getRenderFlags() ^ Renderer::ShowDiagrams);
@@ -1051,6 +1108,16 @@ void KdeApp::slotShowConstellationLabels() {
 void KdeApp::slotShowGalaxyLabels() {
      appCore->getRenderer()->setLabelMode(
             appCore->getRenderer()->getLabelMode() ^ Renderer::GalaxyLabels);
+}
+
+void KdeApp::slotShowNebulaLabels() {
+     appCore->getRenderer()->setLabelMode(
+            appCore->getRenderer()->getLabelMode() ^ Renderer::NebulaLabels);
+}
+
+void KdeApp::slotShowOpenClusterLabels() {
+     appCore->getRenderer()->setLabelMode(
+            appCore->getRenderer()->getLabelMode() ^ Renderer::OpenClusterLabels);
 }
 
 void KdeApp::slotShowAsteroidLabels() {

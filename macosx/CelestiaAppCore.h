@@ -17,7 +17,11 @@
 #import "CelestiaRenderer.h"
 
 
+#ifdef __cplusplus
+class CelestiaCore;
+#else
 @class CelestiaCore;
+#endif
 
 @interface CelestiaAppCore : NSObject {
     CelestiaDestinations* _destinations;
@@ -30,7 +34,7 @@
     -(BOOL)initSimulation;
 -(BOOL)initRenderer;
 -(void)start:(NSDate *)date withTimeZone:(NSTimeZone *)timeZone;
--(void)charEntered:(char)c;
+-(void)charEntered:(char)c withModifiers:(int)modifiers;
 -(void)keyDown:(int)c;
 -(void)keyUp:(int)c;
 -(void)mouseWheel:(float)motion modifiers:(int)modifiers;
