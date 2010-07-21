@@ -110,8 +110,8 @@ dnl Compilation options
 dnl
 
 CELESTIA_CPPFLAGS=""
-CELESTIA_CFLAGS="-O2 -Wall -ffast-math -fexpensive-optimizations"
-CELESTIA_CXXFLAGS="-O2 -Wall -ffast-math -fexpensive-optimizations"
+CELESTIA_CFLAGS=" -Wall  "
+CELESTIA_CXXFLAGS=" -Wall  "
 
 AC_MSG_CHECKING([whether to include debugging code])
 AC_ARG_ENABLE([debug],
@@ -148,8 +148,8 @@ else
 	if (test "$enable_debug" != "yes"); then
 		dnl  must be set here instead of above because -pg and
 		dnl -fomit-frame-pointer are incompatible
-		CELESTIA_CFLAGS="$CELESTIA_CFLAGS -fomit-frame-pointer";
-		CELESTIA_CXXFLAGS="$CELESTIA_CXXFLAGS -fomit-frame-pointer"
+		CELESTIA_CFLAGS="$CELESTIA_CFLAGS ";
+		CELESTIA_CXXFLAGS="$CELESTIA_CXXFLAGS "
 	fi
 fi
 AC_MSG_RESULT($enable_profile)

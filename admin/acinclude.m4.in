@@ -3154,10 +3154,10 @@ AC_DEFUN([AC_CHECK_COMPILERS],
       if test $kde_use_debug_code = "full"; then
         CFLAGS="-g3 -fno-inline $CFLAGS"
       else
-        CFLAGS="-g -O2 -fno-schedule-insns -fno-inline $CFLAGS"
+        CFLAGS="-g  -fno-schedule-insns -fno-inline $CFLAGS"
       fi
     else
-      CFLAGS="-O2 $CFLAGS"
+      CFLAGS=" $CFLAGS"
     fi
   fi
 
@@ -3189,7 +3189,7 @@ AC_DEFUN([AC_CHECK_COMPILERS],
         if test "$kde_use_debug_code" = "full"; then
           CXXFLAGS="-g3 -fno-inline $CXXFLAGS"
         else
-          CXXFLAGS="-g -O2 -fno-schedule-insns -fno-inline $CXXFLAGS"
+          CXXFLAGS="-g  -fno-schedule-insns -fno-inline $CXXFLAGS"
         fi
       fi
       KDE_CHECK_COMPILER_FLAG(fno-builtin,[CXXFLAGS="-fno-builtin $CXXFLAGS"])
@@ -3201,7 +3201,7 @@ AC_DEFUN([AC_CHECK_COMPILERS],
       if test "$CXX" = "KCC"; then
         CXXFLAGS="+K3 $CXXFLAGS"
       else
-        CXXFLAGS="-O2 $CXXFLAGS"
+        CXXFLAGS=" $CXXFLAGS"
       fi
     fi
   fi
@@ -5906,7 +5906,7 @@ AC_DEFUN([AM_PROG_OBJC],[
 AC_CHECK_PROGS(OBJC, gcc, gcc)
 test -z "$OBJC" && AC_MSG_ERROR([no acceptable objective-c gcc found in \$PATH])
 if test "x${OBJCFLAGS-unset}" = xunset; then
-   OBJCFLAGS="-g -O2"
+   OBJCFLAGS="-g "
 fi
 AC_SUBST(OBJCFLAGS)
 _AM_IF_OPTION([no-dependencies],, [_AM_DEPENDENCIES(OBJC)])
