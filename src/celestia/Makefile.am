@@ -43,6 +43,8 @@ endif
 
 if ENABLE_GLUT
 GLUTSOURCES = glutmain.cpp
+Applicationsdir = $(datadir)/applications
+Applications_DATA = celestia.desktop
 endif
 
 if ENABLE_THEORA
@@ -53,7 +55,8 @@ celestia_SOURCES = $(COMMONSOURCES) $(CELXSOURCES) $(GLUTSOURCES) $(THEORASOURCE
 
 EXTRA_DIST = \
 	Celestia.dsp \
-	celestia.mak
+	celestia.mak \
+	celestia.desktop
 
 celestia_LDADD = \
 	$(celestiaKDELIBS) \

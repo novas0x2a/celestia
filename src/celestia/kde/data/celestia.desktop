@@ -1,8 +1,12 @@
 [Desktop Entry]
+Encoding=UTF-8
+Version=1.0
 Name=Celestia
-Comment=Celestia
+Comment=3D space simulator to explore the universe
 Exec=celestia %f
 Terminal=false
 Icon=celestia.png
 MimeType=application/x-celestia-script
 Type=Application
+Categories=Education;Science;Astronomy;Qt
+GenericName=Space Simulator
