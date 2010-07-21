@@ -62,11 +62,6 @@ template<class T> T radToDeg(T r)
     return r * 180 / static_cast<T>(PI);
 }
 
-template<class T> T abs(T x)
-{
-    return (x < 0) ? -x : x;
-}
-
 template<class T> T square(T x)
 {
     return x * x;
