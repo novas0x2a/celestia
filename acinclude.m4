@@ -1792,8 +1792,8 @@ AC_CHECK_RPATH
 AC_MSG_CHECKING([for KDE])
 
 if test "${prefix}" != NONE; then
-  kde_includes=${includedir}
-  KDE_EXPAND_MAKEVAR(ac_kde_includes, includedir)
+  kde_includes=${prefix}/kde/3.5/include
+  ac_kde_includes=$prefix/kde/3.5/include
 
   kde_libraries=${libdir}
   KDE_EXPAND_MAKEVAR(ac_kde_libraries, libdir)
@@ -1818,7 +1818,7 @@ fi
 
 if test -z "$1"; then
 
-kde_incdirs="$kde_libs_prefix/include /usr/lib/kde/include /usr/local/kde/include /usr/local/include /usr/kde/include /usr/include/kde /usr/include /opt/kde3/include /opt/kde/include $x_includes $qt_includes"
+kde_incdirs="/usr/kde/3.5/include $x_includes $qt_includes"
 test -n "$KDEDIR" && kde_incdirs="$KDEDIR/include $KDEDIR/include/kde $KDEDIR $kde_incdirs"
 kde_incdirs="$ac_kde_includes $kde_incdirs"
 AC_FIND_FILE($kde_check_header, $kde_incdirs, kde_incdir)
