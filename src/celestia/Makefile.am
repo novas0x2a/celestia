@@ -10,6 +10,7 @@ SUBDIRS += kde
 celestiaKDELIBS = $(LIB_QT) $(LIB_KDECORE) $(LIB_KDEUI) $(LIB_KFILE) \
                   $(LIBSOCKET) kde/libkdegui.a
 celestia_LDFLAGS = $(all_libraries) $(KDE_RPATH)
+LIBS += $(LIB_QT) $(LIB_KDECORE) $(LIB_KDEUI) $(LIB_KFILE)
 endif
 
 if ENABLE_GTK
